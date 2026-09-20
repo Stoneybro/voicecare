@@ -1,0 +1,15 @@
+{
+  "name": "voicecare",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@12.4.2",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "dev": "corepack pnpm --filter @voicecare/web dev",
+    "build": "corepack pnpm --filter @voicecare/web build",
+    "lint": "corepack pnpm --filter @voicecare/web lint",
+    "typecheck": "corepack pnpm --filter @voicecare/web typecheck"
+  }
+}
