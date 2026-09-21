@@ -18,8 +18,8 @@ A doctor or other healthcare professional may read a caregiver-generated summary
 
 ## Primary flow: create a report
 
-1. The caregiver opens VoiceCare.
-2. The app shows the selected patient and a prominent **Speak** button.
+1. The caregiver opens VoiceCare and the app creates or restores an anonymous demo session.
+2. The app checks its database connection, loads the fictional patient, and shows a prominent **Speak** button.
 3. The caregiver starts a session and describes the patient's measurements and observations.
 4. The system builds a draft while preserving the original transcript.
 5. The system asks concise questions about material ambiguities.
@@ -28,6 +28,20 @@ A doctor or other healthcare professional may read a caregiver-generated summary
 8. A correction invalidates any prior confirmation and triggers a new review.
 9. The caregiver explicitly selects or says **Confirm and save**.
 10. The backend atomically saves one confirmed report and shows it in history.
+
+No registration or login is required. The server-issued demo session determines which caregiver, patient, drafts, reports, and
+personal expressions the browser may access.
+
+## Remote-judge startup and reset flow
+
+1. A judge opens the deployed HTTPS URL in a supported browser.
+2. The app calls `GET /api/bootstrap` to create or restore the browser's demo session.
+3. The app shows **Ready to speak** only after the session, fictional patient, and database are ready.
+4. The page provides an example sentence and explains microphone access before requesting it.
+5. If microphone access is unavailable, the judge can enter the same observation as text and continue through clarification,
+   correction, confirmation, history, and export.
+6. **Reset demo** calls `POST /api/reset`, abandons the current session, and creates a clean workspace that cannot access the
+   earlier session's data.
 
 ## First-use unit flow
 
@@ -58,13 +72,16 @@ The caregiver can correct a draft by saying, for example, “The temperature was
 - Ask which field is meant when the target is ambiguous.
 - Retain a revision trail within the draft.
 - Read back the changed item and any dependent interpretation.
-- Require confirmation again after every correction.
+- Require confirmation again after every correction, including after the report was saved.
+- Never edit or remove a saved report. Confirming the corrected revision saves a new report that becomes the draft's current
+  report, and the earlier report remains as the superseded record.
 
 ## History and summary flow
 
 The caregiver can:
 
-- View confirmed reports in reverse chronological order.
+- View current confirmed reports in reverse chronological order, with superseded revisions excluded by default.
+- See when a report was updated and open its earlier revisions when the audit trail is needed.
 - Open a report to see structured fields, original wording, observation time, and entry time.
 - Filter the summary by date range.
 - Generate a print-friendly summary showing measurements and observations chronologically.
@@ -82,4 +99,6 @@ The caregiver can:
 - Saved.
 - Connection interrupted.
 - Unconfirmed draft available for recovery or discard.
-
+- Preparing demo session.
+- Microphone unavailable with text fallback.
+- Demo reset complete.

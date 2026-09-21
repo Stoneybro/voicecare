@@ -41,6 +41,8 @@ Each test case shall have a reference record containing:
 
 ## Prototype release gates
 
+- A first-time visitor can open the deployed HTTPS URL and begin without registration, login, or manual setup.
+- Two browsers receive separate demo sessions and cannot read or change each other's records.
 - Zero silent unit assignments in the final test set.
 - Zero unconfirmed saves.
 - Zero duplicate reports from repeated save attempts.
@@ -48,6 +50,11 @@ Each test case shall have a reference record containing:
 - Every post-confirmation correction requires a new confirmation.
 - Every connection-loss test leaves the report unconfirmed unless saving completed beforehand.
 - The complete demo flow works on the selected presentation browser.
+- Refreshing the page restores the current browser's session and history.
+- Denied microphone permission offers a retry and a working typed-observation fallback.
+- Database or voice-service startup delay shows a clear loading state rather than a broken interface.
+- **Reset demo** produces a clean fictional workspace.
+- The print-friendly summary works from the deployed URL.
 
 These gates establish demo readiness only.
 
@@ -56,9 +63,11 @@ These gates establish demo readiness only.
 ### Build segment A: voice capture
 
 - Mobile-friendly home screen.
+- Anonymous-session bootstrap and fictional patient creation.
 - Temporary token endpoint.
 - Browser audio connection.
 - Live transcript and session-state display.
+- Typed-observation fallback.
 
 ### Build segment B: structured draft
 
@@ -79,13 +88,51 @@ These gates establish demo readiness only.
 - Personal-expression consent and retrieval.
 - Confirmed-report history.
 - Date-range summary and print view.
+- Session-scoped history and **Reset demo**.
 
 ### Build segment E: evaluation and presentation
 
 - Fictional test dataset.
 - Recorded results against release gates.
 - Hosted prototype.
+- Health endpoint and deployed smoke tests.
 - Demo video and pitch deck.
+
+## Unattended deployment checks
+
+Before submission, test the production URL in a private window and on at least one mobile and one desktop browser. Verify that:
+
+- `GET /api/bootstrap` creates a session and loads the fictional patient.
+- `GET /api/health` confirms application and database readiness without exposing secrets.
+- Microphone permission is requested only after an explanation and user action.
+- Voice-token creation, connection, and safe retry work against the deployed environment.
+- Two different browsers cannot see or modify each other's data.
+- A database cold start resolves to **Ready to speak** within the allowed timeout.
+- Raw provider, database, and stack-trace errors are replaced by friendly retry messages.
+- Refresh, repeated save, history, reset, and printing all work after deployment restart.
+- Environment variables and provider quotas are checked before the judging window.
+
+## Hackathon scope classification
+
+### Required
+
+- Anonymous browser-scoped demo session and one fictional patient.
+- Voice capture, typed fallback, structured draft, clarification, and visual correction.
+- Spoken and visible review, explicit confirmation, idempotent save, and session-scoped history.
+- Remembered expressions, printable summary, reset, and friendly loading, error, and retry states.
+
+### Optional if time permits
+
+- Spoken confirmation; the visible confirmation button remains the reliable default.
+- Multiple fictional patients.
+- Downloaded PDF export in addition to the browser print view.
+- A detailed interface for browsing superseded revisions.
+
+### Explicitly deferred
+
+- Registered user accounts, passwords, and account recovery.
+- Real patient data, production healthcare compliance, and enterprise security operations.
+- Clinician accounts, EHR integration, advanced roles, and multi-caregiver collaboration.
 
 ## Demo script
 
@@ -103,9 +150,8 @@ The presentation should demonstrate one continuous story:
 ## Open decisions
 
 - Final product name and visual identity.
-- Authentication method for the hosted demo.
-- Whether unconfirmed drafts survive browser restarts.
-- Exact retention period for local drafts and confirmed reports.
 - Whether spoken confirmation is enabled for the demo or the primary confirmation is a button.
 - The final set of supported observation categories.
 
+The hosted demo uses anonymous secure sessions, retains them for up to 72 hours, and restores unconfirmed drafts while the session
+remains valid. These are settled prototype decisions rather than open production commitments.

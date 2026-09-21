@@ -6,7 +6,7 @@ Family members and other non-professional caregivers often hold useful informati
 
 ## Product proposition
 
-VoiceCare lets a caregiver speak as naturally as they would in a voice note. It turns that speech into a structured care report, clarifies important uncertainty, reads the draft back, and saves it only after the caregiver confirms it. This structured d ata can then be given to a healthcare professional or used to help with proper continuity of care.
+VoiceCare lets a caregiver speak as naturally as they would in a voice note. It turns that speech into a structured care report, clarifies important uncertainty, reads the draft back, and saves it only after the caregiver confirms it. This structured data can then be given to a healthcare professional or used to help with proper continuity of care.
 
 The core interaction is:
 
@@ -19,6 +19,7 @@ Demonstrate that a caregiver can create an accurate, reviewable care report thro
 ## MVP success criteria
 
 - A caregiver can start recording from the home screen with one primary action.
+- A first-time judge can open the deployed application and begin without registration, login, or manual setup.
 - Supported measurements and observations are extracted into a draft.
 - Missing or ambiguous units, values, subjects, and times are resolved or marked unresolved.
 - The caregiver hears and sees the same draft before saving.
@@ -31,13 +32,15 @@ Demonstrate that a caregiver can create an accurate, reviewable care report thro
 
 The prototype supports:
 
-- One authenticated caregiver account.
+- One anonymous, browser-scoped demo workspace containing a fictional caregiver and patient.
 - One patient selected per recording session.
 - English voice input and spoken responses.
 - Blood pressure, blood glucose, temperature, heart rate, and oxygen saturation.
 - Symptoms, pain location, food intake, mood, sleep, and free-text observations.
 - Spoken clarification, visual correction, confirmation, history, and printable summary.
 - Persistent personal expressions scoped to the caregiver and patient where appropriate.
+- A text-entry fallback when microphone access or browser audio is unavailable.
+- A reset action that gives the judge a clean demo workspace.
 
 ## Non-goals for the hackathon
 
@@ -56,4 +59,5 @@ The prototype supports:
 - Device units can be configured or confirmed when first encountered.
 - The prototype uses fictional patient data during demonstrations and evaluation.
 - An internet connection is available during voice sessions.
-
+- The hosted prototype issues a secure anonymous session cookie to isolate each browser's demo records.
+- A demo session and its records may expire after 72 hours.

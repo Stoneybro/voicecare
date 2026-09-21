@@ -30,26 +30,43 @@ The agent submits proposed draft updates through a tool call. A draft update con
   "observation_time_status": "explicit",
   "measurements": [
     {
+      "id": "measurement_123",
       "type": "blood_pressure",
       "systolic": 138,
       "diastolic": 88,
       "unit": "mmHg",
-      "source_text": "pressure was one thirty-eight over eighty-eight"
+      "observed_at": "2026-09-19T08:00:00+01:00",
+      "time_precision": "exact",
+      "time_source_text": "this morning",
+      "time_status": "relative_resolved",
+      "source_text": "pressure was one thirty-eight over eighty-eight",
+      "resolution_status": "resolved"
     }
   ],
   "observations": [
     {
+      "id": "observation_123",
       "category": "pain",
       "text": "Left knee pain",
       "body_location": "left knee",
       "negated": false,
-      "source_text": "her left knee was hurting"
+      "observed_at": "2026-09-19T08:00:00+01:00",
+      "time_precision": "exact",
+      "time_source_text": "this morning",
+      "time_status": "relative_resolved",
+      "source_text": "her left knee was hurting",
+      "resolution_status": "resolved"
     }
   ]
 }
 ```
 
 The backend validates tool arguments and returns either the updated draft or a list of issues requiring clarification.
+The shared schema permits `explicit`, `relative_resolved`, `report_default`, and `unknown` time statuses, and `resolved`,
+`needs_unit`, `needs_value`, `needs_time`, and `ambiguous` resolution statuses.
+
+The agent may name the selected patient, but it cannot choose a caregiver or demo-session identity. The backend obtains that identity
+from the secure browser session and rejects any patient identifier outside it.
 
 ## Material ambiguity rules
 
@@ -79,6 +96,8 @@ Clarification is not required for cosmetic punctuation or wording that does not 
 - “This morning,” “yesterday,” and similar phrases are resolved using the caregiver's timezone and session date.
 - If a phrase maps to a period rather than an exact time, the original phrase and reduced precision are preserved.
 - The system shall not substitute entry time for observation time without labeling it as assumed.
+- Each measurement and observation carries its own time fields. The report-level time is only a default for items that clearly share it.
+- Statements covering different periods, such as “pain yesterday, but none today,” produce separate time-qualified observations.
 
 ## Personal-expression policy
 
@@ -96,10 +115,11 @@ CAPTURING → DRAFT → NEEDS_CLARIFICATION → REVIEWABLE → CONFIRMED → SAV
 
 Any draft-changing event after `REVIEWABLE` or `CONFIRMED` creates a new revision and returns the report to `DRAFT` or `NEEDS_CLARIFICATION`. Only the backend can transition a confirmed revision to `SAVED`.
 
+The same applies after `SAVED`: a correction creates a new revision, invalidates the confirmation, cannot alter the saved report, and the next confirmation saves a new report that becomes current while the earlier report remains superseded.
+
 ## Suggested voice wording
 
 - Clarification: “You said the sugar was 6.2. Does the meter use mmol/L or mg/dL?”
 - Correction check: “I changed the temperature to 37.2 degrees Celsius.”
 - Review: “I have blood pressure 138 over 88, glucose 6.2 millimoles per litre, temperature 37.2 degrees Celsius, and pain in the left knee. Is that correct?”
 - Unresolved state: “I still need the glucose unit before this report can be saved.”
-

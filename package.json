@@ -10,6 +10,7 @@
     "dev": "corepack pnpm --filter @voicecare/web dev",
     "build": "corepack pnpm --filter @voicecare/web build",
     "lint": "corepack pnpm --filter @voicecare/web lint",
-    "typecheck": "corepack pnpm --filter @voicecare/web typecheck"
+    "typecheck": "corepack pnpm -r typecheck",
+    "test": "corepack pnpm --filter @voicecare/shared test"
   }
 }
