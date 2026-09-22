@@ -25,7 +25,6 @@ The agent submits proposed draft updates through a tool call. A draft update con
 
 ```json
 {
-  "patient_id": "patient_123",
   "observation_time": "2026-09-19T08:00:00+01:00",
   "observation_time_status": "explicit",
   "measurements": [
@@ -65,8 +64,9 @@ The backend validates tool arguments and returns either the updated draft or a l
 The shared schema permits `explicit`, `relative_resolved`, `report_default`, and `unknown` time statuses, and `resolved`,
 `needs_unit`, `needs_value`, `needs_time`, and `ambiguous` resolution statuses.
 
-The agent may name the selected patient, but it cannot choose a caregiver or demo-session identity. The backend obtains that identity
-from the secure browser session and rejects any patient identifier outside it.
+The agent may name the selected patient, but it cannot choose a caregiver, patient, or demo-session identity: the agent is
+never told internal ids, so any identifier it sent would be hallucinated. The backend binds patient and caregiver
+from the secure browser session and the draft URL instead, and rejects any draft identifier outside that session.
 
 ## Material ambiguity rules
 
@@ -93,7 +93,8 @@ Clarification is not required for cosmetic punctuation or wording that does not 
 
 ## Time policy
 
-- “This morning,” “yesterday,” and similar phrases are resolved using the caregiver's timezone and session date.
+- Demo rule: the caregiver is reporting as things happen, so the recording moment is the observation time. An unstated time is captured as-is and never blocks the report — the agent does not ask when a reading was taken.
+- “This morning,” “yesterday,” and similar phrases are still resolved using the caregiver's timezone and session date, and explicit past times are preserved on the item. They never gate saving either.
 - If a phrase maps to a period rather than an exact time, the original phrase and reduced precision are preserved.
 - The system shall not substitute entry time for observation time without labeling it as assumed.
 - Each measurement and observation carries its own time fields. The report-level time is only a default for items that clearly share it.

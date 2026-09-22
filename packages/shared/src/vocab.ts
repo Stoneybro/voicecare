@@ -78,7 +78,10 @@ export const ISSUE_CODES = [
 export type IssueCode = (typeof ISSUE_CODES)[number];
 
 // A permission question never blocks the report itself; it only blocks storing the vocabulary entry.
-export const BLOCKING_ISSUE_CODES: IssueCode[] = ["needs_unit", "needs_value", "needs_time", "ambiguous"];
+// needs_time never blocks either: the demo records at the recording moment, so an unstated time
+// is captured as-is instead of interrogating the caregiver (spec/04 "Time policy"). Explicit
+// past times in speech ("yesterday") are still preserved on the item; they just never gate saving.
+export const BLOCKING_ISSUE_CODES: IssueCode[] = ["needs_unit", "needs_value", "ambiguous"];
 
 export const CLARIFICATION_KINDS = [
   "unit",

@@ -205,7 +205,6 @@ const expectedRevisionField = z
 
 export const updateDraftArgsSchema = z.object({
   expected_revision: expectedRevisionField,
-  patient_id: z.string().min(1).describe("The patient id from the session context."),
   observation_time: isoDateTimeSchema
     .nullish()
     .describe("ISO 8601 instant for the report as a whole, when the caregiver stated one."),

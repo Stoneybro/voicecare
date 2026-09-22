@@ -1,7 +1,8 @@
+import { pingDatabase } from "@/lib/db";
 import { listKnownExpressions } from "@/lib/expressions";
 import { ApiError, handle, jsonOk } from "@/lib/http";
 import { patientPreferredUnits, requireSession, sessionPatient } from "@/lib/session";
-import { buildVoiceSession, mintVoiceToken, VoiceTokenError } from "@/lib/voice";
+import { buildVoiceSession, CLOSING_TURN, mintVoiceToken, RECORDING_TURN, VoiceTokenError } from "@/lib/voice";
 
 // Short-lived browser token plus the session configuration the browser opens: system prompt,
 // transcription context, key terms, and the generated tool definitions (spec/05).
@@ -12,9 +13,12 @@ export async function POST(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const patient = await sessionPatient(session, url.searchParams.get("patient_id"));
     try {
+      // Warm the database while the browser connects: tool calls run inside a spoken
+      // turn, so a cold Neon compute resume here would surface as reply latency.
       const [token, expressions] = await Promise.all([
         mintVoiceToken(),
         listKnownExpressions(session.caregiverId, patient.id),
+        pingDatabase(),
       ]);
       return jsonOk({
         token: token.token,
@@ -25,6 +29,9 @@ export async function POST(request: Request): Promise<Response> {
           expressions,
           timeZone: session.timezone,
         }),
+        // Sibling of session (never sent inside it): the two turn-detection postures the
+        // browser swaps between on Speak/Done. Kept server-side so both stay in one place.
+        turn: { recording: RECORDING_TURN, closing: CLOSING_TURN },
       });
     } catch (error) {
       if (error instanceof VoiceTokenError) {

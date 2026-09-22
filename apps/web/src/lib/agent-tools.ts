@@ -12,12 +12,14 @@ import {
   expressionPermissionQuestion,
   extractCareReport,
   finishDraftArgsSchema,
+  formatValidationIssues,
   isUnitForType,
   rememberExpressionArgsSchema,
   updateDraftArgsSchema,
   type AgentToolName,
   type DraftRecord,
 } from "@voicecare/shared";
+import type { z } from "zod";
 import { applyDraftChange, findDraftRow, loadDraft, makeClarification, recordFromRow } from "./drafts";
 import { getSql } from "./db";
 import { createExpression, listKnownExpressions } from "./expressions";
@@ -34,6 +36,23 @@ export type ToolResult = {
   note?: string;
 };
 
+function parseToolArgs<T>(schema: z.ZodType<T>, args: unknown, tool: string): T {
+  const parsed = schema.safeParse(args);
+  if (!parsed.success) {
+    // Every problem at once: the agent fixes all fields in one retry instead of
+    // discovering them one 400 at a time and stalling the conversation. Logged server-side
+    // (visible in the dev terminal) so a recurring rejection can be traced to the exact args.
+    const detail = formatValidationIssues(parsed.error);
+    console.error(`[voicecare] tool arguments rejected: ${tool}: ${detail} args=${JSON.stringify(args).slice(0, 500)}`);
+    throw new ApiError(
+      400,
+      "invalid_tool_arguments",
+      `${tool}: ${detail}. Fix every field and call again with the same expected_revision.`,
+    );
+  }
+  return parsed.data;
+}
+
 function toResult(draft: DraftRecord, note?: string): ToolResult {
   return {
     ok: true,
@@ -46,11 +65,11 @@ function toResult(draft: DraftRecord, note?: string): ToolResult {
   };
 }
 
-async function draftContext(session: DemoSession, draftId: string, patientId: string) {
+// Patient identity comes from the server session and the draft URL, never from the model:
+// the voice agent is never told internal ids, so any patient identifier it sends would be
+// hallucinated. findDraftRow already scopes the draft to this session's caregiver.
+async function draftContext(session: DemoSession, draftId: string) {
   const row = await findDraftRow(session, draftId);
-  if (row.patient_id !== patientId) {
-    throw new ApiError(404, "draft_not_found", "That draft is not part of this demo session.");
-  }
   const record = recordFromRow(row, session.timezone);
   const patient = await sessionPatient(session, row.patient_id);
   const units = patientPreferredUnits(patient);
@@ -63,13 +82,8 @@ async function handleUpdateDraft(
   draftId: string,
   args: unknown,
 ): Promise<ToolResult> {
-  const parsed = updateDraftArgsSchema.safeParse(args);
-  if (!parsed.success) {
-    const first = parsed.error.issues[0];
-    throw new ApiError(400, "invalid_tool_arguments", `update_draft: ${first?.path.join(".")}: ${first?.message ?? "not valid"}`);
-  }
-  const input = parsed.data;
-  const context = await draftContext(session, draftId, input.patient_id);
+  const input = parseToolArgs(updateDraftArgsSchema, args, "update_draft");
+  const context = await draftContext(session, draftId);
   const draft = await applyDraftChange(session, {
     draftId,
     expectedRevision: input.expected_revision,
@@ -95,14 +109,8 @@ async function handleAskCaregiver(
   draftId: string,
   args: unknown,
 ): Promise<ToolResult> {
-  const parsed = askCaregiverArgsSchema.safeParse(args);
-  if (!parsed.success) {
-    const first = parsed.error.issues[0];
-    throw new ApiError(400, "invalid_tool_arguments", `ask_caregiver: ${first?.path.join(".")}: ${first?.message ?? "not valid"}`);
-  }
-  const input = parsed.data;
-  const row = await findDraftRow(session, draftId);
-  const context = await draftContext(session, draftId, row.patient_id);
+  const input = parseToolArgs(askCaregiverArgsSchema, args, "ask_caregiver");
+  const context = await draftContext(session, draftId);
   if (input.kind === "expression" && !input.phrase) {
     throw new ApiError(400, "invalid_tool_arguments", "ask_caregiver: phrase is required when kind is 'expression'.");
   }
@@ -139,12 +147,7 @@ async function handleRememberExpression(
   draftId: string,
   args: unknown,
 ): Promise<ToolResult> {
-  const parsed = rememberExpressionArgsSchema.safeParse(args);
-  if (!parsed.success) {
-    const first = parsed.error.issues[0];
-    throw new ApiError(400, "invalid_tool_arguments", `remember_expression: ${first?.path.join(".")}: ${first?.message ?? "not valid"}`);
-  }
-  const input = parsed.data;
+  const input = parseToolArgs(rememberExpressionArgsSchema, args, "remember_expression");
   const row = await findDraftRow(session, draftId);
   const record = recordFromRow(row, session.timezone);
   const phrase = input.phrase.trim().toLowerCase();
@@ -179,7 +182,7 @@ async function handleRememberExpression(
     note = `The caregiver declined, so "${input.phrase.trim()}" was not remembered.`;
   }
 
-  const context = await draftContext(session, draftId, row.patient_id);
+  const context = await draftContext(session, draftId);
   const draft = await applyDraftChange(session, {
     draftId,
     expectedRevision: input.expected_revision,
@@ -214,12 +217,7 @@ async function handleConfirmPatientUnit(
   draftId: string,
   args: unknown,
 ): Promise<ToolResult> {
-  const parsed = confirmPatientUnitArgsSchema.safeParse(args);
-  if (!parsed.success) {
-    const first = parsed.error.issues[0];
-    throw new ApiError(400, "invalid_tool_arguments", `confirm_patient_unit: ${first?.path.join(".")}: ${first?.message ?? "not valid"}`);
-  }
-  const input = parsed.data;
+  const input = parseToolArgs(confirmPatientUnitArgsSchema, args, "confirm_patient_unit");
   if (!input.confirmed_by_caregiver) {
     throw new ApiError(400, "unit_not_confirmed", "The caregiver has not confirmed the unit yet. Ask them first.");
   }
@@ -241,7 +239,7 @@ async function handleConfirmPatientUnit(
     throw new ApiError(404, "measurement_not_found", "That measurement is no longer on the draft.");
   }
 
-  const context = await draftContext(session, draftId, row.patient_id);
+  const context = await draftContext(session, draftId);
   const units = { ...context.units };
   if (input.remember_for_future_reports) units[input.measurement_type] = input.unit;
   const draft = await applyDraftChange(session, {
@@ -279,11 +277,7 @@ async function handleFinishDraft(
   draftId: string,
   args: unknown,
 ): Promise<ToolResult & { can_save: boolean; next_step: string }> {
-  const parsed = finishDraftArgsSchema.safeParse(args);
-  if (!parsed.success) {
-    const first = parsed.error.issues[0];
-    throw new ApiError(400, "invalid_tool_arguments", `finish_draft: ${first?.path.join(".")}: ${first?.message ?? "not valid"}`);
-  }
+  parseToolArgs(finishDraftArgsSchema, args, "finish_draft");
   const draft = await loadDraft(session, draftId);
   const canSave = draft.status === "REVIEWABLE" && draft.unresolved_issues.filter((issue) => issue.blocking).length === 0;
   return {
@@ -332,7 +326,7 @@ export async function submitTypedObservation(
   if (!text) {
     throw new ApiError(400, "empty_observation", "Type what you observed before continuing.");
   }
-  const context = await draftContext(session, draftId, row.patient_id);
+  const context = await draftContext(session, draftId);
   const extracted = extractCareReport(text, {
     now: new Date(),
     timeZone: session.timezone,

@@ -75,12 +75,15 @@ test("an unsupported unit asks again instead of guessing", () => {
   assert.match(issues[0].question, /not sure which unit/);
 });
 
-test("a missing time becomes its own question only after value and unit are settled", () => {
+test("a missing time is recorded, never a blocking question", () => {
   const ctx = context({ reportTime: { observed_at: null, precision: "unknown", status: "unknown", source_text: null } });
   const { measurement, issues } = resolve({ type: "heart_rate", value: 80, source_text: "her heart was 80" }, ctx);
   assert.equal(measurement.unit, "bpm");
   assert.equal(measurement.resolution_status, "needs_time");
   assert.equal(issues[0].code, "needs_time");
+  // Demo policy: the recording moment stands in for an unstated time, so the report stays
+  // reviewable and the agent never interrogates the caregiver about when it happened.
+  assert.equal(issues[0].blocking, false);
 });
 
 test("the report time is inherited and labelled as the report default", () => {

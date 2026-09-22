@@ -6,6 +6,11 @@
 // Tool calls are client-side function tools: the browser forwards each call to
 // POST /api/drafts/:id/tool, which validates it against the same shared schema and owns the
 // draft (spec/04 "Structured extraction contract").
+//
+// Latency posture for the demo: transcription_mode min_latency plus two turn-detection
+// postures (patient 8 s window while recording, snappy ~1 s close after Done — see
+// RECORDING_TURN/CLOSING_TURN). Misheard numbers stay safe because every value is read
+// back with its unit and nothing saves without explicit confirmation.
 
 import {
   AGENT_TOOLS,
@@ -34,19 +39,14 @@ function maxSessionSeconds(): number {
 
 export type VoiceSessionConfig = {
   system_prompt: string;
-  greeting: string;
   tools: AgentToolDefinition[];
   input: {
     format: { encoding: "audio/pcm" };
     keyterms: string[];
-    transcription_mode: "balanced";
+    transcription_mode: "balanced" | "min_latency" | "max_accuracy";
     transcription_prompt: string;
     language_codes: ["en"];
-    turn_detection: {
-      min_silence: number;
-      max_silence: number;
-      interrupt_response: true;
-    };
+    turn_detection: TurnDetection;
   };
   output: {
     voice: string;
@@ -57,6 +57,31 @@ export type VoiceSessionConfig = {
 export function voiceName(): string {
   return process.env.VOICE_AGENT_VOICE?.trim() || "alba";
 }
+
+export type TurnDetection = {
+  min_silence: number;
+  max_silence: number;
+  interrupt_response: boolean;
+};
+
+// Two turn-detection postures, switched live via session.update (documented as mutable and
+// verified against the live API, whose config echo confirms each change):
+// - RECORDING: built for deliberate speech. A caregiver reading a device pauses mid-note,
+//   so the turn tolerates up to 8 s of silence (highest value confirmed applied live).
+//   The Done button is the real end-of-note signal; this is only the backstop.
+// - CLOSING: sent the moment Done is tapped, so the just-finished turn closes within
+//   ~1 s and "Analyzing…" never waits out the long recording window.
+export const RECORDING_TURN: TurnDetection = {
+  min_silence: 1_200,
+  max_silence: 8_000,
+  interrupt_response: true,
+};
+
+export const CLOSING_TURN: TurnDetection = {
+  min_silence: 400,
+  max_silence: 800,
+  interrupt_response: true,
+};
 
 export function buildSystemPrompt(input: {
   patientName: string;
@@ -93,6 +118,8 @@ export function buildSystemPrompt(input: {
     ``,
     `Rules:`,
     `- Send what you hear with update_draft, including the caregiver's exact words in source_text.`,
+    `- The caregiver may pause for a long time mid-note while reading a device. A pause is never the end: keep accumulating with update_draft. If a note seems partial, acknowledge briefly ("Got it") and wait for more — never rush.`,
+    `- Never ask when an observation occurred or ask for a date or time. If the caregiver does not state a time, it is automatically recorded as happening right now.`,
     `- Never choose a unit only because a number looks plausible. Ask with ask_caregiver first.`,
     `- Ask one short question at a time. Remembering "heart" as heart rate never turns "her heart hurts" into a number.`,
     `- When you think the report is complete, call finish_draft and read its readback sentence word for word, with units.`,
@@ -133,10 +160,6 @@ export function buildKeyTerms(patientName: string, expressions: KnownExpression[
   return [...terms].slice(0, 50);
 }
 
-export function buildGreeting(patientName: string): string {
-  return `Hello! Tell me what you observed for ${patientName} today, in your own words.`;
-}
-
 export function buildVoiceSession(input: {
   patient: PatientSummary;
   preferredUnits: Partial<Record<string, string>>;
@@ -150,19 +173,14 @@ export function buildVoiceSession(input: {
       expressions: input.expressions,
       timeZone: input.timeZone,
     }),
-    greeting: buildGreeting(input.patient.display_name),
     tools: AGENT_TOOLS,
     input: {
       format: { encoding: "audio/pcm" },
       keyterms: buildKeyTerms(input.patient.display_name, input.expressions),
-      transcription_mode: "balanced",
+      transcription_mode: "min_latency",
       transcription_prompt: buildTranscriptionPrompt(input.patient.display_name),
       language_codes: ["en"],
-      turn_detection: {
-        min_silence: 900,
-        max_silence: 2_500,
-        interrupt_response: true,
-      },
+      turn_detection: { ...RECORDING_TURN },
     },
     output: {
       voice: voiceName(),

@@ -187,7 +187,7 @@ export async function createDraft(
   const snapshot: DraftSnapshot = {
     revision: 1,
     status: deriveDraftStatus({ measurements: [], observations: [], transcript, issues: [] }),
-    observation_time: null,
+    observation_time: new Date().toISOString(),
     observation_time_precision: "assumed",
     observation_time_source_text: null,
     transcript,
@@ -202,7 +202,7 @@ export async function createDraft(
         observation_time, observation_time_precision, entry_time, measurements, observations,
         unresolved_issues, clarification_log)
       values (${draftId}, ${patient.id}, ${session.caregiverId}, 1, ${snapshot.status}, ${transcript},
-        null, 'assumed', now(), '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb)
+        now(), 'assumed', now(), '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb)
     `,
     sql`
       insert into draft_revisions (id, draft_id, revision, status, snapshot, reason)
@@ -389,10 +389,22 @@ export async function applyDraftChange(
       timeStatus = input.patch.observation_time_status ?? "explicit";
     }
   }
+  // Demo time policy (spec/04): the caregiver reports as things happen. If unstated,
+  // the observation time defaults to now with precision 'assumed', so the caregiver
+  // is never interrogated about time.
+  const effectiveObservationTime = observationTime ?? now.toISOString();
+  const effectivePrecision = observationTime ? precision : "assumed";
+  const effectiveTimeStatus = observationTime ? timeStatus : "unknown";
+
   const context = resolveContext({
     now,
     patientUnits: input.patientUnits,
-    reportTime: { observed_at: observationTime, precision, status: timeStatus, source_text: sourceText },
+    reportTime: {
+      observed_at: effectiveObservationTime,
+      precision: effectivePrecision,
+      status: effectiveTimeStatus,
+      source_text: sourceText,
+    },
     expressions: input.expressions,
   });
   const merged = applyPatchToItems({
@@ -449,8 +461,8 @@ export async function applyDraftChange(
   const nextSnapshot: DraftSnapshot = {
     revision,
     status,
-    observation_time: observationTime,
-    observation_time_precision: precision,
+    observation_time: effectiveObservationTime,
+    observation_time_precision: effectivePrecision,
     observation_time_source_text: sourceText,
     transcript,
     measurements: merged.measurements,
@@ -467,8 +479,8 @@ export async function applyDraftChange(
         revision = ${revision},
         status = ${status},
         original_transcript = ${transcript},
-        observation_time = ${observationTime},
-        observation_time_precision = ${precision},
+        observation_time = ${effectiveObservationTime},
+        observation_time_precision = ${effectivePrecision},
         observation_time_source = ${sourceText},
         measurements = ${JSON.stringify(merged.measurements)}::jsonb,
         observations = ${JSON.stringify(merged.observations)}::jsonb,
