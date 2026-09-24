@@ -1,5 +1,5 @@
 // Confirmed-report reads: session-scoped history and the printable summary (spec/05
-// "Save and amendment flow", FR-060 - FR-064, spec/02 "History and summary flow").
+// "Save and amendment flow", FR-060 - FR-066, spec/02 "History and export flow").
 //
 // History lists current reports only, so one observation appears exactly once. A report that
 // was superseded by a later confirmed revision of the same draft stays in the database as the
@@ -113,8 +113,8 @@ export async function listCurrentReports(
   return rows.map((row) => recordFromRow(row, rows));
 }
 
-// The printable appointment summary reads the same current reports in chronological order,
-// with the caregiver-reported disclaimer rendered by the client (FR-064).
+// The exports (doctor / family / files) read the same current reports in chronological order,
+// with the caregiver-reported disclaimer rendered by the client (FR-066).
 export async function listSummaryReports(
   session: DemoSession,
   patientId: string,

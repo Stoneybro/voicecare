@@ -4,7 +4,7 @@
 
 VoiceCare records caregiver-reported information. It does not verify medical truth, diagnose a condition, recommend treatment, or replace professional care.
 
-The interface and exported summary shall use language such as:
+The interface and every export (doctor, family, files) shall use language such as:
 
 > Caregiver-reported observations. Review before making medical decisions.
 
@@ -40,7 +40,7 @@ The hackathon prototype does not attempt clinical triage. If the caregiver descr
 
 ## AssemblyAI session data
 
-Voice Agent sessions may include recordings and conversation timelines. Before any use with real patient information, the team must document:
+Streaming (Stage 1) and Voice Agent (Stage 2) sessions may include recordings and conversation timelines. Before any use with real patient information, the team must document:
 
 - Whether session recording can be disabled for the chosen integration.
 - How long session artifacts remain available.
@@ -57,7 +57,7 @@ Voice Agent sessions may include recordings and conversation timelines. Before a
 - The backend issues a random anonymous-session token in an `HttpOnly`, `Secure`, `SameSite=Lax` cookie and stores only its hash.
 - Every patient, draft, report, summary, and expression query is scoped to the caregiver resolved from that cookie.
 - Caregiver or session identifiers supplied by the browser or voice agent never establish ownership.
-- Printable summaries are generated on demand and are not publicly addressable.
+- Printable summaries and file downloads are generated on demand from confirmed reports and are not publicly addressable.
 - Development and production credentials are separated.
 
 ## Demo retention and reset

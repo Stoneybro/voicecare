@@ -10,7 +10,7 @@ const textSchema = z.object({
 
 type Params = { params: Promise<{ id: string }> };
 
-// Typed-observation fallback (FR-015): the same sentence goes through rule-based extraction
+// Typed-observation fallback (FR-018): the same sentence goes through rule-based extraction
 // locally and then the exact same backend resolution rules as voice input.
 export async function POST(request: Request, { params }: Params): Promise<Response> {
   return handle(async () => {

@@ -5,7 +5,7 @@
 - Primary platform: Mobile-friendly web application
 - Initial language: English
 
-VoiceCare helps a non-professional caregiver record a patient's measurements and day-to-day observations by speaking naturally. The system extracts a structured draft, asks about important ambiguities, reads the result back, and saves it only after explicit confirmation.
+VoiceCare helps a non-professional caregiver for someone with a chronic condition record measurements and day-to-day observations by speaking naturally — like a voice note. Stage 1 transcribes the note live with medical speech recognition; Stage 2 has the agent ask about important ambiguities. The system reads the result back, remembers personal expressions once confirmed, and saves only after explicit confirmation. The same confirmed reports then export for doctors, family, and continuing caregivers, filling the gap between appointments.
 
 The hosted hackathon build is an unattended demo that judges can open and test without setup. It uses fictional information and
 an anonymous, browser-scoped demo session instead of registration or login. This is a prototype architecture, not a production

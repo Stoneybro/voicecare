@@ -3,21 +3,24 @@
 ## Home and patient context
 
 - **FR-000:** A first-time visitor shall receive an anonymous, browser-scoped demo session without registration or login.
-- **FR-001:** The home screen shall show the active patient and one prominent action to begin speaking.
-- **FR-002:** The user shall select or confirm the patient before audio is accepted for a new report.
+- **FR-001:** The home screen shall show the active patient, the patient list with an add-patient action, and one prominent action to begin speaking.
+- **FR-002:** The user shall select or confirm the patient before audio is accepted for a new report; switching patients shall load that patient's own draft, history, and expressions.
 - **FR-003:** The home screen shall provide access to confirmed history.
 - **FR-004:** The interface shall expose session state through text and an accessible visual indicator.
 - **FR-005:** Every patient, draft, report, summary, and personal-expression operation shall be scoped to the server-resolved demo session.
 - **FR-006:** The user shall be able to reset the demo and receive a clean fictional workspace.
 
-## Capture and transcription
+## Capture and transcription (Stage 1 — voice note)
 
 - **FR-010:** The application shall request microphone permission only when needed and explain why it is required.
-- **FR-011:** The browser shall obtain a short-lived Voice Agent token from the backend; the AssemblyAI API key shall not be exposed to the client.
-- **FR-012:** The application shall preserve the final caregiver transcript associated with the report draft.
-- **FR-013:** The application shall keep observation time separate from entry time.
-- **FR-014:** The user shall be able to stop or cancel a recording session.
-- **FR-015:** If microphone capture is unavailable, the user shall be able to submit a typed observation and continue through the same draft and confirmation flow.
+- **FR-011:** The browser shall obtain short-lived AssemblyAI tokens from the backend (streaming and voice-agent); the AssemblyAI API key shall not be exposed to the client.
+- **FR-012:** Stage 1 shall stream microphone audio to AssemblyAI Streaming STT with the medical domain and show live transcription without any turn-by-turn chat or interruption while recording.
+- **FR-013:** Tapping Done shall end Stage 1 and hand the finalized transcript to Stage 2 clarification.
+- **FR-014:** If live streaming fails or hears nothing, the locally-recorded backup shall be transcribed with the same medical domain so the note is never lost.
+- **FR-015:** The application shall preserve the final caregiver transcript associated with the report draft.
+- **FR-016:** The application shall keep observation time separate from entry time.
+- **FR-017:** The user shall be able to stop or cancel a recording session.
+- **FR-018:** If microphone capture is unavailable, the user shall be able to submit a typed observation and continue through the same draft and confirmation flow.
 
 ## Structured draft
 
@@ -30,9 +33,9 @@
 - **FR-026:** Measurements and observations shall be validated against one shared schema used by the agent tools, backend, frontend, and tests.
 - **FR-027:** A report-level observation time may be used as a default, but an individual measurement or observation may override it.
 
-## Clarification and correction
+## Clarification and correction (Stage 2 — voice agent)
 
-- **FR-030:** The system shall ask a clarification question when a material field has more than one reasonable interpretation.
+- **FR-030:** After Done, the voice agent shall ask a clarification question when a material field has more than one reasonable interpretation.
 - **FR-031:** Questions shall address one compact ambiguity at a time unless related fields can be safely resolved together.
 - **FR-032:** The caregiver shall be able to answer clarification questions by voice or touch.
 - **FR-033:** The caregiver shall be able to correct any extracted field before saving.
@@ -50,21 +53,23 @@
 - **FR-045:** The interface shall show a clear success or failure result after a save attempt.
 - **FR-046:** Reusing an idempotency key for different save content shall be rejected.
 
-## Personal expressions
+## Personal expressions (adaptive vocabulary)
 
-- **FR-050:** A personal expression shall be stored only after separate, explicit permission to remember it.
+- **FR-050:** A personal expression shall be stored only after separate, explicit permission to remember it — the first clarification must never silently become a permanent rule.
 - **FR-051:** A stored expression shall include its normalized meaning, scope, original phrase, and confirmation date.
 - **FR-052:** The caregiver shall be able to view, correct, or delete remembered expressions.
-- **FR-053:** A personal expression shall influence interpretation only when its context is compatible.
+- **FR-053:** A personal expression shall influence interpretation only when its context is compatible, so later notes using the same phrase resolve without asking again.
 - **FR-054:** All fields produced using a remembered expression shall remain subject to normal review and confirmation.
 
-## History and export
+## History and export (continuity between appointments)
 
 - **FR-060:** History shall contain confirmed reports only by default.
 - **FR-061:** Each history item shall identify the patient, observation time, entry time, and reporting caregiver.
 - **FR-062:** The caregiver shall be able to open a full report and see structured data plus original wording.
-- **FR-063:** The app shall generate a print-friendly summary for a selected date range.
-- **FR-064:** The summary shall state that it contains caregiver-reported observations and is not a clinical record or diagnosis.
+- **FR-063:** The app shall generate a structured doctor summary for a selected date range from the same confirmed data.
+- **FR-064:** The app shall generate a plain-language family summary for a selected date range from the same confirmed data.
+- **FR-065:** The app shall offer JSON and CSV downloads carrying the same confirmed data for continuing caregivers and clinic systems.
+- **FR-066:** Every export shall state that it contains caregiver-reported observations and is not a clinical record or diagnosis.
 
 ## Accessibility
 

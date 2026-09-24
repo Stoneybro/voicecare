@@ -1,8 +1,15 @@
 # Segment 4: Voice and AI Behavior
 
+## Two stages
+
+VoiceCare splits voice into two AssemblyAI stages with different jobs:
+
+- **Stage 1 — Voice-note recording (Streaming STT, domain medical-v1).** Pure recording plus live transcription, no turn-by-turn chat. The browser opens `wss://streaming.assemblyai.com/v3/ws` with `speech_model universal-3-5-pro`, `domain medical-v1`, caregiver keyterms, and medical turn-detection tuning (800/3600 ms). Finalized turns accumulate visibly while the caregiver speaks freely with pauses. Tapping Done sends `Terminate`; the finalized turns become the note transcript. A locally-recorded backup blob plus async transcription (also medical-v1) covers streaming failures.
+- **Stage 2 — Clarification (Voice Agent API, turn-based).** The Stage 1 transcript is injected via `conversation.message` + `reply.create`. The agent runs its tool loop (`update_draft`, `ask_caregiver`, `remember_expression`, `confirm_patient_unit`, `finish_draft`), asking only for what blocks saving. Follow-up answers reuse Stage 1 recording on the already-open agent session.
+
 ## Responsibilities
 
-AssemblyAI provides live transcription, conversational turns, spoken responses, and tool calls. VoiceCare owns the structured draft, validation rules, confirmation state, persistent vocabulary, and final save decision.
+AssemblyAI provides live medical transcription (Stage 1) and conversational turns, spoken responses, and tool calls (Stage 2). VoiceCare owns the structured draft, validation rules, confirmation state, persistent vocabulary, exports, and final save decision.
 
 The model may propose an interpretation. The backend determines whether that interpretation is complete and eligible for confirmation.
 
@@ -102,7 +109,7 @@ Clarification is not required for cosmetic punctuation or wording that does not 
 
 ## Personal-expression policy
 
-Remembered expressions are retrieved by caregiver and compatible patient context. They serve as interpretation context, not unconditional replacements.
+Remembered expressions are retrieved by caregiver and compatible patient context. They serve as interpretation context, not unconditional replacements. A phrase clarified and remembered once resolves on later notes without asking again — that is the adaptive experience getting smoother over time.
 
 For example, remembering “heart” as heart rate does not allow “her heart hurts” to become a numeric measurement. Sentence context, field shape, and readback still apply.
 

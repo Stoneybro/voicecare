@@ -11,7 +11,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test src/numbers.test.ts src/resolve.test.ts src/extract.test.ts src/readback.test.ts"
+    "test": "node --test src/numbers.test.ts src/resolve.test.ts src/extract.test.ts src/readback.test.ts src/exports.test.ts"
   },
   "dependencies": {
     "zod": "4.6.5"

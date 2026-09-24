@@ -1,106 +1,110 @@
-**Yes—this is technically feasible as a hackathon prototype, and the core interaction fits the event well.** The strongest feature is the full cycle: a caregiver speaks, the agent resolves uncertainty, and the caregiver confirms an accurate record.
+# VoiceCare — what it is, and why it is feasible on AssemblyAI
 
-I checked the event page and AssemblyAI’s current documentation. This is a **documentation-based feasibility assessment**; I haven’t run audio through the API, so transcription accuracy and reliability remain to be tested.
+**VoiceCare is a platform where caregivers record observations between doctor's appointments, and those observations become structured data medical personnel can use.** It is built for the AssemblyAI Voice Agent Hackathon, so AssemblyAI tools carry the entire voice pipeline.
+
+**The friction we remove:** most medical platforms are made for medical personnel — medical terminology, forms, structured fields. That is hard for ordinary users, let alone caregivers of chronic patients who may barely use technology. So taking an observation must feel like recording a voice note: open the app, speak freely, tap Done. No forms, no terminology test.
+
+**How it works (two stages):**
+
+1. **Stage 1 — Voice note.** The caregiver records freely while AssemblyAI's medical STT transcribes live (pure recording plus live transcription, no turn-by-turn chat). Tapping Done ends the note.
+2. **Stage 2 — Clarification.** Our VoiceCare agent (AssemblyAI Voice Agent API, turn-based conversation) asks for whatever is missing or ambiguous, one short question at a time.
+3. **Adaptive vocabulary.** The first time a personal phrase is clarified (“her heart is 70” → heart rate 70 bpm), the caregiver can let the system remember it — so it never asks again, and the experience gets smoother over time.
+4. **Exports.** The confirmed record renders in different formats for different readers: a structured doctor summary, a plain-language family summary, and JSON/CSV files — so family members, the next caregiver, or the clinic can fill the gap between appointments or continue care without losing history.
+
+I checked the event page and AssemblyAI's current documentation. This is a **documentation-based feasibility assessment**; transcription accuracy and reliability still need live testing.
 
 **Hackathon fit**
 
-The event runs **September 1–30, 2026**, is online, and requires participants to build on AssemblyAI. Registration remains open throughout the build window. The listed prize pool is $10,000, split between cash and AssemblyAI credits. Your proposed use meets the published technology requirement. [Hackathon page](https://lablab.ai/ai-hackathons/assemblyai-voice-agent-hackathon)
+The event runs **September 1–30, 2026**, is online, and requires participants to build on AssemblyAI. Registration remains open throughout the build window. The listed prize pool is $10,000, split between cash and AssemblyAI credits. This proposal meets the published technology requirement twice over (Streaming STT plus Voice Agent API). [Hackathon page](https://lablab.ai/ai-hackathons/assemblyai-voice-agent-hackathon)
 
-Lablab’s general guidance calls for an online working prototype, a presentation video, and a pitch deck. The event page I could access does not specify a detailed judging rubric or submission cutoff time, so those still need checking in the participant instructions. [Submission guidance](https://lablab.ai/guide)
+Lablab's general guidance calls for an online working prototype, a presentation video, and a pitch deck. The event page I could access does not specify a detailed judging rubric or submission cutoff time, so those still need checking in the participant instructions. [Submission guidance](https://lablab.ai/guide)
 
-**What AssemblyAI can support**
+**What AssemblyAI supports**
 
-AssemblyAI currently documents a managed **Voice Agent API** that combines speech recognition, LLM reasoning, and spoken responses. You can build this without separately assembling all three services. [API overview](https://www.assemblyai.com/docs)
+AssemblyAI currently documents managed Streaming STT (with a medical domain) and a managed **Voice Agent API** combining speech recognition, LLM reasoning, and spoken responses. The two-stage design maps onto them directly — no separately assembled pipeline. [API overview](https://www.assemblyai.com/docs)
 
-| Your requirement                                | Feasibility and implementation                                                                           |
-| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Caregiver speaks in the browser                 | Supported through browser audio and a WebSocket connection; your backend issues temporary access tokens. |
-| Agent asks clarification questions              | Supported through the conversational agent and its system prompt.                                        |
-| Extract measurements into fields                | Use tool calls with structured parameters; your backend validates the resulting draft.                   |
-| Remember confirmed expressions                  | Build a caregiver-specific vocabulary store and retrieve it during future sessions.                      |
-| Read back and correct the record                | Implement a review conversation tied to the current draft.                                               |
-| Save history and prepare a doctor-facing record | Build these in your application and database.                                                            |
+| Requirement | Feasibility and implementation |
+| --- | --- |
+| Caregiver records a voice note with live transcription, no chat | Streaming STT WebSocket with `domain medical-v1`; browser streams 16 kHz PCM, finals accumulate, `Terminate` on Done. Fallback: async transcription with the same domain. |
+| Agent asks for missing information after Done | Voice Agent API: inject the Stage 1 transcript via `conversation.message` + `reply.create`, then turn-based tool calls through `update_draft` / `ask_caregiver` / `finish_draft`. |
+| Extract measurements into fields | Tool calls with structured parameters; backend validates the draft and blocks saving while required fields are unresolved. |
+| Remember confirmed expressions so it never asks twice | Caregiver-scoped vocabulary store, retrieved into the agent's prompt and key terms each session; separate explicit permission before storing. |
+| Read back and correct the record | Review conversation tied to the current draft revision; corrections invalidate confirmation and require re-confirmation. |
+| Export for doctors, family, continuing caregivers | Deterministic renderers over the same confirmed reports: doctor-structured, family plain-language, JSON/CSV files. |
 
-The relevant integration mechanisms are documented in [browser integration](https://www.assemblyai.com/docs/voice-agents/voice-agent-api/browser-integration) and [agent tools](https://www.assemblyai.com/docs/voice-agents/voice-agent-api/tools/overview).
+The relevant integration mechanisms are documented in [streaming authentication](https://www.assemblyai.com/docs/streaming/authenticate-with-a-temporary-token), [medical mode for streaming](https://www.assemblyai.com/docs/streaming/medical-mode), [browser integration](https://www.assemblyai.com/docs/voice-agents/voice-agent-api/browser-integration) and [agent tools](https://www.assemblyai.com/docs/voice-agents/voice-agent-api/tools/overview).
 
-**Your adaptive vocabulary is feasible—with one important distinction**
+**The adaptive vocabulary is feasible — with one important distinction**
 
 There are two separate problems:
 
-* **Hearing the words correctly.** AssemblyAI offers transcription context and key terms to improve recognition.
-* **Understanding a caregiver’s personal meaning.** Your application stores confirmed associations and supplies them to the agent.
+* **Hearing the words correctly.** AssemblyAI offers transcription context and key terms (plus Medical Mode) to improve recognition.
+* **Understanding a caregiver's personal meaning.** The application stores confirmed associations and supplies them to the agent.
 
 AssemblyAI explicitly distinguishes transcription context from the system prompt controlling agent behavior. Adding “heart” to a vocabulary list does not, by itself, teach the system that a particular caregiver uses it to mean heart rate. [Transcription context documentation](https://www.assemblyai.com/docs/voice-agents/voice-agent-api/transcription-prompt)
 
-For the prototype, store each association with its caregiver, relevant patient context, confirmed meaning, and confirmation date. Allow correction or deletion.
+For the prototype, each association is stored with its caregiver, patient scope, confirmed meaning, and confirmation date — only after separate permission — and can be corrected or deleted. Confirmation of one measurement never automatically establishes a permanent rule; the agent asks whether the expression should be remembered.
 
-Also, **confirmation of one measurement should not automatically establish a permanent language rule**. The agent can separately ask whether the caregiver wants that expression remembered.
+The “her heart is 70” example is useful, but a general LLM may already interpret it correctly. To demonstrate memory, show a genuinely personal expression being clarified, remembered across a new session, and corrected when its meaning changes.
 
-Your “her heart is 70” example is useful, but a general LLM may already interpret it correctly. To demonstrate the value of memory, show a genuinely personal expression being clarified, remembered across a new session, and corrected when its meaning changes.
+**The main weakness to guard against is silent unit inference**
 
-**The main weakness in the current description is silent unit inference**
-
-Your sample recording never says “mmol/L” or “Celsius,” but the output supplies both.
-
-That conflicts with your promise to confirm uncertain meanings. I would implement these rules:
+A sample recording may never say “mmol/L” or “Celsius,” but an output must not supply them unasked. That would conflict with the promise to confirm uncertain meanings. The implemented rules:
 
 * Establish device units during setup or ask when first needed.
 * Include units in the spoken readback.
 * Leave unresolved units unknown; never choose them solely because a value looks plausible.
 * Record observation time separately from entry time.
-* Preserve the caregiver’s original wording alongside the confirmed fields.
+* Preserve the caregiver's original wording alongside the confirmed fields.
 
 The same caution applies to vocabulary. Remembering “heart” as heart rate must not cause “her heart hurts” to become a measurement.
 
-**Make confirmation an application rule**
-
-A prompt saying “never save without confirmation” is insufficient on its own. I recommend this implementation:
+**Confirmation is an application rule, not a prompt wish**
 
 1. The agent submits a **draft**.
-2. Your backend checks required fields and unresolved ambiguities.
-3. The app displays and reads back that specific draft.
-4. The caregiver confirms or corrects it.
-5. Your backend saves the confirmed version once.
+2. The backend checks required fields and unresolved ambiguities.
+3. The app displays and reads back that specific draft revision.
+4. The caregiver confirms or corrects it (button; voice correction supported).
+5. The backend saves the confirmed version once, idempotently.
 
-Any correction should invalidate the previous confirmation. A dropped connection or repeated tool call should not create an unconfirmed or duplicate record.
+Any correction invalidates the previous confirmation. A dropped connection or repeated tool call cannot create an unconfirmed or duplicate report.
 
-For a first version, a large **Confirm and save** button gives you a clear confirmation event; spoken confirmation can be added and tested against interruptions and ambiguous replies.
+**What is built for this hackathon**
 
-**What I would build for this hackathon**
+One patient selected per session (with add/switch), English initially, and the five vitals plus six observation categories. Included:
 
-Keep the scope to one patient per session, English initially, and the measurements and observations already in your example. Include:
+* Speak (live medical captions) → Done → clarify → review/correct → confirm → save → export.
+* Persistent adaptive vocabulary.
+* Chronological history per patient.
+* Three exports from the same confirmed data: doctor-structured, family plain-language, JSON/CSV files.
 
-* Speak, review/correct, and save.
-* Persistent vocabulary memory.
-* Chronological history.
-* A simple printable summary for appointments.
+Clarification and readback are audible so the user is never forced to read a medical form.
 
-Make clarification and readback audible so the user is not forced to read a medical form.
+AssemblyAI's voice-agent language support has separate input and output lists (18 input languages, six spoken outputs). Test the actual languages and accents served rather than treating listed support as proof. [Supported languages](https://www.assemblyai.com/docs/voice-agents/voice-agent-api/supported-languages)
 
-AssemblyAI’s voice-agent language support has separate input and output lists. The current API supports 18 input languages with native code-switching, while officially supported spoken output is limited to six languages. Test the actual languages, language combinations, and accents you intend to serve rather than treating listed support as proof of accuracy for your users. [Supported languages](https://www.assemblyai.com/docs/voice-agents/voice-agent-api/supported-languages)
+AssemblyAI's **Medical Mode is available for both pre-recorded and streaming speech-to-text**, which is exactly what Stage 1 uses. Medical Mode is not documented inside the managed Voice Agent API, which is why Stage 2 uses transcription prompts and key terms instead. [Pre-recorded Medical Mode](https://www.assemblyai.com/docs/pre-recorded-audio/medical-mode) and [streaming Medical Mode](https://www.assemblyai.com/docs/streaming/medical-mode)
 
-AssemblyAI’s **Medical Mode is available for both pre-recorded and streaming speech-to-text**, but the documentation does not establish that it can be enabled inside the managed Voice Agent API. For the prototype, use the Voice Agent API’s transcription prompt and key terms, or test a custom streaming pipeline if Medical Mode is essential. [Pre-recorded Medical Mode](https://www.assemblyai.com/docs/pre-recorded-audio/medical-mode) and [streaming Medical Mode](https://www.assemblyai.com/docs/streaming/medical-mode)
+**Feasibility tests to run first**
 
-**The feasibility tests I would run first**
+Use about 40–60 fictional care reports spoken by several people, including likely users' accents and ordinary background noise.
 
-Use about 40–60 fictional care reports spoken by several people, including likely users’ accents and ordinary background noise.
+| Test | Expected behavior |
+| --- | --- |
+| “Pressure is one thirty-eight over eighty-eight” | Preserve both numbers and their order. |
+| “Sugar is six point two” with no established unit | Ask about units. |
+| “Seventy—sorry, seventy-two” | Use the correction. |
+| “She had pain yesterday, but none today” | Preserve timing and negation. |
+| Streaming blocked mid-note | Fall back to the backup recording without losing the note. |
+| Newly confirmed personal expression, then a fresh session | Retrieve the association and still read back the record. |
+| “Her heart hurts” after learning “heart” means pulse | Preserve the symptom; avoid applying the measurement shortcut. |
+| Caregiver corrects the readback | Update the draft and request confirmation again. |
+| Connection drops before confirmation | Leave the record unconfirmed. |
+| Export the same reports three ways | Doctor, family, and file outputs agree with the confirmed data. |
 
-| Test                                                      | Expected behavior                                              |
-| --------------------------------------------------------- | -------------------------------------------------------------- |
-| “Pressure is one thirty-eight over eighty-eight”          | Preserve both numbers and their order.                         |
-| “Sugar is six point two” with no established unit         | Ask about units.                                               |
-| “Seventy—sorry, seventy-two”                              | Use the correction.                                            |
-| “She had pain yesterday, but none today”                  | Preserve timing and negation.                                  |
-| Newly confirmed personal expression, then a fresh session | Retrieve the association and still read back the record.       |
-| “Her heart hurts” after learning “heart” means pulse      | Preserve the symptom; avoid applying the measurement shortcut. |
-| Caregiver corrects the readback                           | Update the draft and request confirmation again.               |
-| Connection drops before confirmation                      | Leave the record unconfirmed.                                  |
+Measure **exact field accuracy**, including value, unit, patient, and time — not just readable transcripts. Also measure unnecessary questions, task completion time, and duplicate or unconfirmed saves.
 
-Measure **exact field accuracy**, including value, unit, patient, and time—not just whether the transcript looks readable. Also measure unnecessary questions, task completion time, and duplicate or unconfirmed saves.
+The prototype gate: **zero silent unit assignments and zero unconfirmed saves in the test set**, with every confirmed numeric field matching the intended record. Passing a small test set supports a demo, not clinical reliability.
 
-My proposed prototype gate would be **zero silent unit assignments and zero unconfirmed saves in the test set**, with every confirmed numeric field matching the intended record. Passing a small test set would support a demo, not establish clinical reliability.
+Use fictional patient information throughout. Voice Agent and streaming sessions can retain recordings and transcripts, so retention needs explicit review before using real care data. [Session history documentation](https://www.assemblyai.com/docs/voice-agents/voice-agent-api/session-history)
 
-Use fictional patient information for that demo. Voice Agent sessions can retain recordings and transcripts, so retention needs explicit review before using real care data. [Session history documentation](https://www.assemblyai.com/docs/voice-agents/voice-agent-api/session-history)
-
-**I would proceed with the idea.** Build and test the clarification-and-confirmation loop first. Its reliability—and whether caregivers find it easier than entering a form—will determine whether the product delivers on the pitch.
-
+**Proceed with the idea.** Build and test the record-then-clarify loop first. Its reliability — and whether caregivers find speaking plus answering easier than a form — determines whether the product delivers on the pitch: continuity between appointments for chronic care.

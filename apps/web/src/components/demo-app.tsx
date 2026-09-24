@@ -15,10 +15,12 @@ import type {
   ExpressionRecord,
   ReportRecord,
 } from "@voicecare/shared";
+import { buildDoctorText, buildFamilyText, buildReportsCSV, buildReportsJSON } from "@voicecare/shared";
 import { useVoiceSession } from "@/hooks/use-voice";
 
 type LoadState = "preparing" | "ready" | "failed";
 type View = "home" | "history";
+type ExportTab = "doctor" | "family" | "files";
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -60,10 +62,14 @@ export default function DemoApp() {
   const [summaryFrom, setSummaryFrom] = useState("");
   const [summaryTo, setSummaryTo] = useState("");
   const [summary, setSummary] = useState<ReportRecord[] | null>(null);
+  const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
+  const [addingPatient, setAddingPatient] = useState(false);
+  const [newPatientName, setNewPatientName] = useState("");
+  const [exportTab, setExportTab] = useState<ExportTab>("doctor");
   const saveKeyRevisionRef = useRef<number | null>(null);
   const conversationRef = useRef<HTMLDivElement | null>(null);
 
-  const patient = bootstrap?.patients[0] ?? null;
+  const patient = bootstrap?.patients.find((p) => p.id === selectedPatientId) ?? bootstrap?.patients[0] ?? null;
 
   const voice = useVoiceSession({
     patientId: patient?.id ?? null,
@@ -84,6 +90,7 @@ export default function DemoApp() {
       const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
       const data = await api<BootstrapResponse>(`/api/bootstrap?timezone=${encodeURIComponent(timezone)}`);
       setBootstrap(data);
+      setSelectedPatientId((prev) => prev ?? data.patients[0]?.id ?? null);
       setDraft(data.current_draft);
       setExpressions(data.expressions);
       const patientId = data.patients[0]?.id;
@@ -108,14 +115,87 @@ export default function DemoApp() {
   }, [voice.lines, voice.liveUser, voice.liveAgent, draft?.readback]);
 
   async function ensureDraft(): Promise<DraftRecord> {
-    if (draft) return draft;
+    if (draft && patient && draft.patient_id === patient.id) return draft;
     if (!patient) throw new Error("The demo session is still loading.");
+    // Switching patients: load that patient's current draft instead of reusing Rosa's.
+    if (!draft || draft.patient_id !== patient.id) {
+      try {
+        const existing = await api<{ draft: DraftRecord | null }>(`/api/drafts?patient_id=${encodeURIComponent(patient.id)}`);
+        if (existing.draft) {
+          setDraft(existing.draft);
+          return existing.draft;
+        }
+      } catch {
+        // Fall through to creating a fresh draft.
+      }
+    }
+    if (draft && draft.patient_id === patient.id) return draft;
     const created = await api<DraftRecord>("/api/drafts", {
       method: "POST",
       body: JSON.stringify({ patient_id: patient.id }),
     });
     setDraft(created);
     return created;
+  }
+
+  async function switchPatient(patientId: string) {
+    if (busy || patientId === patient?.id) return;
+    setBusy(true);
+    setNotice(null);
+    try {
+      voice.stop();
+      setSelectedPatientId(patientId);
+      setSelectedReport(null);
+      setSummary(null);
+      const [draftPayload, history, exprs] = await Promise.all([
+        api<{ draft: DraftRecord | null }>(`/api/drafts?patient_id=${encodeURIComponent(patientId)}`),
+        api<ReportRecord[]>(`/api/reports?patient_id=${encodeURIComponent(patientId)}`),
+        api<ExpressionRecord[]>(`/api/expressions?patient_id=${encodeURIComponent(patientId)}`).catch(() => [] as ExpressionRecord[]),
+      ]);
+      setDraft(draftPayload.draft);
+      setReports(history);
+      setExpressions(exprs);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Could not switch patient.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addPatient() {
+    const name = newPatientName.trim();
+    if (!name || busy) return;
+    setBusy(true);
+    setNotice(null);
+    try {
+      const created = await api<{ id: string; display_name: string }>("/api/patients", {
+        method: "POST",
+        body: JSON.stringify({ display_name: name }),
+      });
+      setBootstrap((prev) =>
+        prev ? { ...prev, patients: [...prev.patients, { id: created.id, display_name: created.display_name, preferred_units: {} }] } : prev,
+      );
+      setNewPatientName("");
+      setAddingPatient(false);
+      await switchPatient(created.id);
+      setNotice(`Now recording for ${created.display_name}.`);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Could not add patient.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function downloadFile(filename: string, content: string, mime: string) {
+    const blob = new Blob([content], { type: `${mime};charset=utf-8` });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   function handleVoiceError(err: unknown): string {
@@ -260,6 +340,7 @@ export default function DemoApp() {
         body: JSON.stringify({ timezone }),
       });
       setBootstrap(data);
+      setSelectedPatientId(data.patients[0]?.id ?? null);
       setDraft(data.current_draft);
       setExpressions(data.expressions);
       setReports([]);
@@ -339,23 +420,27 @@ export default function DemoApp() {
   const statusText =
     voice.status === "requesting-mic"
       ? "Starting the microphone…"
-      : voice.status === "connecting"
-        ? "Connecting…"
-        : voice.done && voice.status === "processing"
-          ? "VoiceCare is checking what you observed…"
-          : voice.done
-            ? "Answered? Tap below to speak again."
-            : voice.status === "ready"
-              ? "Ready — speak naturally."
-              : voice.status === "listening"
-                ? "Listening… take your time. Tap when finished."
-                : voice.status === "processing"
-                  ? "Thinking…"
-                  : voice.status === "error"
-                    ? "Voice unavailable — type instead."
-                    : loadState === "ready"
-                      ? "Ready."
-                      : "Preparing…";
+      : voice.status === "recording"
+        ? "Recording with live transcription — speak freely, take your time. Tap Done when finished."
+        : voice.status === "transcribing"
+          ? "Checking your recording with medical transcription…"
+          : voice.status === "connecting"
+            ? "Connecting to VoiceCare…"
+            : voice.done && voice.status === "processing"
+              ? "VoiceCare is checking what you observed…"
+              : voice.done
+                ? "Answered? Tap below to speak again."
+                : voice.status === "ready"
+                  ? "Ready — speak naturally."
+                  : voice.status === "listening"
+                    ? "Recording your answer… Tap Done when finished."
+                    : voice.status === "processing"
+                      ? "Thinking…"
+                      : voice.status === "error"
+                        ? "Voice unavailable — type instead."
+                        : loadState === "ready"
+                          ? "Ready."
+                          : "Preparing…";
 
   const blocking = draft?.unresolved_issues.filter((issue) => issue.blocking) ?? [];
   const tappable = blocking.filter((issue) => issue.options.length > 0 || issue.code === "expression_permission");
@@ -376,6 +461,72 @@ export default function DemoApp() {
           <p className="mt-1 text-sm text-zinc-500">
             Tap Speak, then describe what you observed{patient ? ` for ${patient.display_name}` : ""} in your own words.
           </p>
+        )}
+        {(bootstrap?.patients.length ?? 0) > 0 && (
+          <div className="mt-3 flex flex-wrap items-center justify-center gap-2" aria-label="Patients">
+            {bootstrap!.patients.map((candidate) => (
+              <button
+                key={candidate.id}
+                type="button"
+                disabled={busy}
+                onClick={() => void switchPatient(candidate.id)}
+                aria-pressed={candidate.id === patient?.id}
+                className={`rounded-full px-4 py-1.5 text-sm font-semibold transition disabled:opacity-50 ${
+                  candidate.id === patient?.id ? "bg-zinc-900 text-white" : "border border-zinc-300 hover:bg-zinc-100"
+                }`}
+              >
+                {candidate.display_name}
+              </button>
+            ))}
+            {!addingPatient ? (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setAddingPatient(true)}
+                className="rounded-full border border-dashed border-zinc-400 px-4 py-1.5 text-sm font-semibold text-zinc-600 hover:bg-zinc-100 disabled:opacity-50"
+              >
+                + Add patient
+              </button>
+            ) : (
+              <span className="flex items-center gap-1.5">
+                <input
+                  value={newPatientName}
+                  onChange={(e) => setNewPatientName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void addPatient();
+                    if (e.key === "Escape") {
+                      setAddingPatient(false);
+                      setNewPatientName("");
+                    }
+                  }}
+                  placeholder="Name, e.g. Mama"
+                  maxLength={80}
+                  autoFocus
+                  aria-label="New patient name"
+                  className="w-36 rounded-full border border-zinc-300 px-3 py-1.5 text-sm"
+                />
+                <button
+                  type="button"
+                  disabled={busy || newPatientName.trim().length === 0}
+                  onClick={() => void addPatient()}
+                  className="rounded-full bg-zinc-900 px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
+                >
+                  Add
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAddingPatient(false);
+                    setNewPatientName("");
+                  }}
+                  className="rounded-full border px-3 py-1.5 text-sm"
+                  aria-label="Cancel adding patient"
+                >
+                  ✕
+                </button>
+              </span>
+            )}
+          </div>
         )}
       </header>
 
@@ -407,9 +558,16 @@ export default function DemoApp() {
                   type="button"
                   onClick={voice.finishSpeaking}
                   aria-label="Done speaking"
-                  className="h-36 w-36 animate-pulse rounded-full bg-amber-500 text-xl font-bold text-white shadow-lg transition hover:bg-amber-600 active:scale-95"
+                  disabled={voice.status === "transcribing" || voice.status === "connecting" || voice.status === "processing"}
+                  className="h-36 w-36 animate-pulse rounded-full bg-amber-500 text-xl font-bold text-white shadow-lg transition hover:bg-amber-600 active:scale-95 disabled:animate-none disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Done Speaking
+                  {voice.status === "transcribing"
+                    ? "Transcribing…"
+                    : voice.status === "connecting"
+                      ? "Connecting…"
+                      : voice.status === "processing"
+                        ? "Analyzing…"
+                        : "Done Speaking"}
                 </button>
                 <button
                   type="button"
@@ -731,8 +889,12 @@ export default function DemoApp() {
             )}
           </section>
 
-          <section aria-label="Appointment summary" className="mt-6 text-center">
-            <h2 className="text-lg font-bold">Appointment summary</h2>
+          <section aria-label="Exports for care continuity" className="mt-6 text-center">
+            <h2 className="text-lg font-bold">Exports — fill the gap between appointments</h2>
+            <p className="mt-1 text-sm text-zinc-500">
+              Stage 1 records the voice note, Stage 2 clarifies it — these exports carry the same confirmed reports to{" "}
+              {patient ? patient.display_name : "the patient"}&apos;s doctor, family, or next caregiver.
+            </p>
             <div className="mt-2 flex flex-wrap items-center justify-center gap-2 text-sm">
               <label>
                 From <input type="date" value={summaryFrom} onChange={(e) => setSummaryFrom(e.target.value)} className="rounded-lg border p-1.5" />
@@ -743,36 +905,72 @@ export default function DemoApp() {
               <button type="button" onClick={() => void loadSummary()} className="rounded-full border px-4 py-1.5 font-semibold">
                 Load
               </button>
-              {summary && summary.length > 0 && (
-                <button type="button" onClick={() => window.print()} className="rounded-full bg-zinc-900 px-4 py-1.5 font-semibold text-white">
-                  Print
-                </button>
-              )}
             </div>
-            {summary && (
+            <div className="mt-3 flex justify-center gap-2" role="tablist" aria-label="Export formats">
+              {(["doctor", "family", "files"] as ExportTab[]).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  role="tab"
+                  aria-selected={exportTab === tab}
+                  onClick={() => setExportTab(tab)}
+                  className={`rounded-full px-4 py-1.5 text-sm font-semibold ${
+                    exportTab === tab ? "bg-zinc-900 text-white" : "border border-zinc-300 hover:bg-zinc-100"
+                  }`}
+                >
+                  {tab === "doctor" ? "Doctor" : tab === "family" ? "Family" : "Files"}
+                </button>
+              ))}
+            </div>
+            {(summary || reports.length > 0) && (
               <div className="mt-2 rounded-2xl border border-zinc-200 bg-white p-3 text-left text-sm" id="print-summary">
-                <p className="font-semibold">Caregiver-reported observations. Review before making medical decisions.</p>
-                {summary.length === 0 ? (
-                  <p className="mt-1">No reports in this range.</p>
-                ) : (
-                  <ul className="mt-1 space-y-1">
-                    {summary.map((report) => (
-                      <li key={report.id}>
-                        <strong>
-                          {new Date(report.observation_time ?? report.entry_time).toLocaleString([], {
-                            dateStyle: "medium",
-                            timeStyle: "short",
-                          })}
-                          :
-                        </strong>{" "}
-                        {report.measurements
-                          .map((m) => `${m.type.replace(/_/g, " ")} ${measurementText(m.type, m.systolic, m.diastolic, m.value)} ${m.unit ?? ""}`)
-                          .join("; ")}
-                        {report.observations.length > 0 && `; ${report.observations.map((o) => `${o.negated ? "no " : ""}${o.text}`).join("; ")}`}
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                {(() => {
+                  const data = summary ?? reports;
+                  const name = patient?.display_name ?? "Patient";
+                  if (data.length === 0) return <p>No reports in this range.</p>;
+                  if (exportTab === "doctor") {
+                    return (
+                      <>
+                        <pre className="whitespace-pre-wrap font-sans">{buildDoctorText(data, name)}</pre>
+                        <div className="mt-2 text-center">
+                          <button type="button" onClick={() => window.print()} className="rounded-full bg-zinc-900 px-4 py-1.5 font-semibold text-white">
+                            Print doctor summary
+                          </button>
+                        </div>
+                      </>
+                    );
+                  }
+                  if (exportTab === "family") {
+                    return (
+                      <>
+                        <pre className="whitespace-pre-wrap font-sans">{buildFamilyText(data, name)}</pre>
+                        <div className="mt-2 text-center">
+                          <button type="button" onClick={() => window.print()} className="rounded-full bg-zinc-900 px-4 py-1.5 font-semibold text-white">
+                            Print family summary
+                          </button>
+                        </div>
+                      </>
+                    );
+                  }
+                  return (
+                    <div className="flex flex-wrap justify-center gap-2 py-2">
+                      <button
+                        type="button"
+                        onClick={() => downloadFile(`voicecare-${name.toLowerCase()}-reports.json`, buildReportsJSON(data), "application/json")}
+                        className="rounded-full bg-zinc-900 px-4 py-1.5 font-semibold text-white"
+                      >
+                        Download JSON
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => downloadFile(`voicecare-${name.toLowerCase()}-reports.csv`, buildReportsCSV(data), "text/csv")}
+                        className="rounded-full border px-4 py-1.5 font-semibold"
+                      >
+                        Download CSV
+                      </button>
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </section>

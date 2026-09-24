@@ -2,8 +2,8 @@ import { handle, jsonOk, parseDateRange } from "@/lib/http";
 import { listSummaryReports } from "@/lib/reports";
 import { requireSession, sessionPatient } from "@/lib/session";
 
-// Print-friendly summary data for a selected date range (FR-063). The client renders the
-// caregiver-reported disclaimer alongside it (FR-064).
+// Summary data backing all three exports for a selected date range (FR-063 - FR-066). The client renders the
+// caregiver-reported disclaimer alongside it (FR-066).
 export async function GET(request: Request): Promise<Response> {
   return handle(async () => {
     const session = await requireSession();

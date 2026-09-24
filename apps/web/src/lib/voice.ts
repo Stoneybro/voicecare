@@ -7,10 +7,11 @@
 // POST /api/drafts/:id/tool, which validates it against the same shared schema and owns the
 // draft (spec/04 "Structured extraction contract").
 //
-// Latency posture for the demo: transcription_mode min_latency plus two turn-detection
-// postures (patient 8 s window while recording, snappy ~1 s close after Done — see
-// RECORDING_TURN/CLOSING_TURN). Misheard numbers stay safe because every value is read
-// back with its unit and nothing saves without explicit confirmation.
+// Latency posture for the demo: transcription_mode min_latency. Pure push-to-talk:
+// the caregiver speaks freely, taps Done, and only then does the agent respond.
+// Turn detection uses explicit silence windows (disabling semantic auto-end-of-turn)
+// with a 2-minute max_silence — effectively "never" for a care note. The Done button
+// fires reply.create to trigger the response on demand.
 
 import {
   AGENT_TOOLS,
@@ -59,28 +60,31 @@ export function voiceName(): string {
 }
 
 export type TurnDetection = {
-  min_silence: number;
-  max_silence: number;
   interrupt_response: boolean;
+  min_silence?: number;
+  max_silence?: number;
 };
 
-// Two turn-detection postures, switched live via session.update (documented as mutable and
-// verified against the live API, whose config echo confirms each change):
-// - RECORDING: built for deliberate speech. A caregiver reading a device pauses mid-note,
-//   so the turn tolerates up to 8 s of silence (highest value confirmed applied live).
-//   The Done button is the real end-of-note signal; this is only the backstop.
-// - CLOSING: sent the moment Done is tapped, so the just-finished turn closes within
-//   ~1 s and "Analyzing…" never waits out the long recording window.
+// Push-to-talk recording posture.
+//
+// interrupt_response: false — the agent never interrupts the caregiver mid-speech.
+//
+// min_silence + max_silence: setting these explicitly disables the API's semantic
+// end-of-turn detection (which would auto-respond when speech sounds complete) and
+// replaces it with pure silence-based detection. 120 s is a hard backstop; the Done
+// button sends reply.create long before it fires. Without these values the semantic
+// detector fires automatically after a natural pause, which is exactly the problem.
 export const RECORDING_TURN: TurnDetection = {
-  min_silence: 1_200,
-  max_silence: 8_000,
-  interrupt_response: true,
+  interrupt_response: false,
+  min_silence: 30_000,  // 30 s — never fires during a normal care note
+  max_silence: 120_000, // 2 min — absolute backstop
 };
 
-export const CLOSING_TURN: TurnDetection = {
-  min_silence: 400,
-  max_silence: 800,
-  interrupt_response: true,
+// Same posture for follow-up answers: the caregiver taps Done again when finished.
+export const ANSWER_TURN: TurnDetection = {
+  interrupt_response: false,
+  min_silence: 30_000,
+  max_silence: 120_000,
 };
 
 export function buildSystemPrompt(input: {

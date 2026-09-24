@@ -13,3 +13,4 @@ export * from "./resolve.ts";
 export * from "./readback.ts";
 export * from "./extract.ts";
 export * from "./tool-schema.ts";
+export * from "./exports.ts";

@@ -2,7 +2,7 @@ import { pingDatabase } from "@/lib/db";
 import { listKnownExpressions } from "@/lib/expressions";
 import { ApiError, handle, jsonOk } from "@/lib/http";
 import { patientPreferredUnits, requireSession, sessionPatient } from "@/lib/session";
-import { buildVoiceSession, CLOSING_TURN, mintVoiceToken, RECORDING_TURN, VoiceTokenError } from "@/lib/voice";
+import { buildVoiceSession, ANSWER_TURN, mintVoiceToken, RECORDING_TURN, VoiceTokenError } from "@/lib/voice";
 
 // Short-lived browser token plus the session configuration the browser opens: system prompt,
 // transcription context, key terms, and the generated tool definitions (spec/05).
@@ -31,7 +31,7 @@ export async function POST(request: Request): Promise<Response> {
         }),
         // Sibling of session (never sent inside it): the two turn-detection postures the
         // browser swaps between on Speak/Done. Kept server-side so both stay in one place.
-        turn: { recording: RECORDING_TURN, closing: CLOSING_TURN },
+        turn: { recording: RECORDING_TURN, answer: ANSWER_TURN },
       });
     } catch (error) {
       if (error instanceof VoiceTokenError) {

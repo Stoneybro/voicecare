@@ -1,6 +1,8 @@
 # VoiceCare
 
-VoiceCare is a voice-first care documentation prototype for the AssemblyAI Voice Agent Hackathon.
+VoiceCare is a voice-first care documentation prototype for the AssemblyAI Voice Agent Hackathon: caregivers of chronic patients record observations between appointments as naturally as a voice note, and those observations become structured data for medical personnel and the whole care circle.
+
+Two AssemblyAI stages do the work. **Stage 1** records the voice note with live medical transcription (Streaming STT, `medical-v1`) and stays silent until the caregiver taps Done. **Stage 2** has the VoiceCare agent (Voice Agent API, turn-based) ask for whatever is missing or ambiguous. A personal phrase clarified once can be remembered with permission, so the system never asks twice. Confirmed reports export three ways from the same data: a structured doctor summary, a plain-language family summary, and JSON/CSV files for continuing care.
 
 The deployed hackathon build is designed for unattended remote judging. It uses fictional information and automatically creates
 an anonymous, browser-scoped demo session, so judges do not register or sign in and cannot see another browser's demo records.

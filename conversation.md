@@ -4,6 +4,62 @@ Long-form responses live here (CLI readability). Newest entry first.
 
 ---
 
+## 2026-09-24 — New iteration: two-stage voice, live medical STT, multi-format exports, patient switcher
+
+### Decisions (user-confirmed)
+- Stage 1: live browser streaming to AssemblyAI Streaming STT with `medical-v1` (true live captions), backup MediaRecorder blob + async fallback (also medical-v1).
+- Exports: doctor structured + family plain-language + JSON/CSV files, deterministic templates (no LLM generation).
+- Scope: include multi-patient add/switch now, keep 5 vitals + 6 observation categories.
+
+### Built
+- `POST /api/voice/streaming-token`: mints Streaming STT tokens (`GET https://streaming.assemblyai.com/v3/token`, raw-key auth) and returns medical config (universal-3-5-pro, medical-v1, keyterms, prompt, 800/3600 ms).
+- `use-voice.ts`: Stage 1 streams mic via AudioWorklet 16 kHz resample (zero-gain sink) + commits `Turn` finals live; Done sends `Terminate`, prefers streaming transcript, falls back to `/api/voice/transcribe`; Stage 2 injects via `conversation.message` + `reply.create` into the Voice Agent (unchanged tool loop). Follow-up answers repeat Stage 1 on the open agent session.
+- `POST /api/voice/transcribe`: fallback now sets `domain medical-v1` + generic medical keyterms.
+- `POST /api/patients` + `GET /api/drafts?patient_id=`: multi-patient backend; home header has pill switcher + inline add; per-patient draft/history/expressions reload.
+- `packages/shared/src/exports.ts` (+ 4 tests): deterministic doctor/family/CSV/JSON builders with disclaimer in every format; History view has Doctor/Family/Files tabs with print + downloads.
+- Docs: spec/01 (two-stage + exports), spec/04 (Stage 1/Stage 2 contract), todo.md (patient done, live verification list), walkthrough (voice, routes, UI, 32 tests).
+
+### Verification
+- `typecheck` clean, `test` 32/32 pass, `lint` 0 errors, `next build` clean (20 routes incl. `/api/patients`, `/api/voice/streaming-token`).
+
+### Still needs a human with a microphone
+- Live streaming check (captions appear, Done handoff matches), two-browser isolation re-check on the new endpoints, export print/download from the deployed URL.
+
+---
+
+## 2026-09-21 — Silence, part 2: the last unverified assumption + self-diagnosis
+
+### Eliminated the server first (again, live)
+
+The current config (1200/8000 window, min_latency) passes the handshake: `session.ready`,
+exact echo, clean teardown. Sessions open fine — the fault is in the browser audio path.
+
+### The suspect: an unconnected worklet may never run
+
+My worklet was deliberately left unconnected to the speakers (to avoid mic playback). But
+whether every browser actually *pulls* an unconnected worklet is the one assumption in the
+audio path I never verified — and the docs' own minimal client routes mic→worklet→**destination**.
+Fix: the worklet now connects through a **zero-gain node** — provably silent locally,
+provably pulled everywhere. This matches the documented wiring instead of my assumption.
+
+### Silence can no longer fail silently
+
+A local analyser tap now watches the mic itself (no UI change, ~1 check/second): if your
+microphone provably hears speech for 8+ seconds while the server never acknowledges a word,
+the app says so outright — *"Your microphone hears you, but the assistant isn't
+responding"* — instead of showing Listening… forever. Three possible outcomes of your next
+test, each decisive: live text appears (fixed); that new error appears (server/network
+side, mic proven good); neither appears (browser mic side — check the mic permission icon
+and try Chrome/Edge).
+
+### Also fixed alongside
+
+Fresh taps now tear down the previous audio graph first (no stacked mics/sockets), and a
+socket that dies before ever becoming ready can't strand an open mic.
+
+Verified: typecheck, lint, build, 28 tests, live handshake. **Restart dev, hard-refresh,
+tap once, speak.** Tell me which of the three outcomes you get.
+
 ## 2026-09-21 — No transcription: found an audio-graph leak, fixed it
 
 ### Why I believe it's ours, not the API

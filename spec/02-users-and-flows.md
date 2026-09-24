@@ -2,32 +2,34 @@
 
 ## Primary user
 
-The primary user is a family member or non-professional home caregiver who observes a patient's daily condition but may not know medical terminology or feel comfortable completing complex digital forms.
+The primary user is a family member or non-professional home caregiver for someone with a chronic condition — observing daily measurements and changes but possibly unfamiliar with medical terminology and uncomfortable with complex digital forms. Taking an observation must feel like recording a voice note, not operating a medical device.
 
 Typical needs include:
 
-- Recording several measurements at once.
+- Recording several measurements at once, with pauses to read a device.
 - Describing symptoms and ordinary observations in familiar language.
+- Being heard correctly without repeating or restarting.
 - Correcting speech recognition without restarting.
-- Remembering what happened across multiple days.
-- Presenting a concise record during an appointment.
+- Remembering what happened across multiple days and patients.
+- Presenting a concise record during an appointment, and handing continuity to family or the next caregiver.
 
 ## Secondary audience
 
-A doctor or other healthcare professional may read a caregiver-generated summary. The MVP does not give this audience an account or imply that the information has been clinically verified.
+Doctors, other medical personnel, family members, and continuing caregivers read what the primary user records. The MVP gives none of them an account: they receive exports (doctor-structured, family plain-language, JSON/CSV files). Every export states the information is caregiver-reported, not clinically verified.
 
-## Primary flow: create a report
+## Primary flow: record a voice note, clarify, save, export
 
 1. The caregiver opens VoiceCare and the app creates or restores an anonymous demo session.
-2. The app checks its database connection, loads the fictional patient, and shows a prominent **Speak** button.
-3. The caregiver starts a session and describes the patient's measurements and observations.
-4. The system builds a draft while preserving the original transcript.
-5. The system asks concise questions about material ambiguities.
-6. The system reads the resolved draft back and displays it as editable fields.
+2. The app checks its database connection, loads the fictional patients, and shows the selected patient plus a prominent **Speak Care Note** button.
+3. **Stage 1 — Voice note.** The caregiver speaks freely in their own words, with pauses. Live medical transcription appears as captions (no agent chat, no interruptions). Tapping **Done Speaking** ends recording. If live streaming fails, the backup recording is transcribed instead — the note is never lost.
+4. **Stage 2 — Clarification.** The transcript moves to the VoiceCare agent, which asks concise turn-based questions about material ambiguities only (missing units, unclear values or meanings).
+5. The system builds a draft while preserving the original transcript and the caregiver's exact wording per field.
+6. The system reads the resolved draft back — with units spoken aloud — and displays the same information.
 7. The caregiver corrects any item by voice or touch.
 8. A correction invalidates any prior confirmation and triggers a new review.
-9. The caregiver explicitly selects or says **Confirm and save**.
+9. The caregiver explicitly selects **Confirm and save**.
 10. The backend atomically saves one confirmed report and shows it in history.
+11. The caregiver exports the confirmed record for whoever needs it next: doctor summary for the appointment, family summary in plain words, or JSON/CSV files for continuing care.
 
 No registration or login is required. The server-issued demo session determines which caregiver, patient, drafts, reports, and
 personal expressions the browser may access.
@@ -76,22 +78,27 @@ The caregiver can correct a draft by saying, for example, “The temperature was
 - Never edit or remove a saved report. Confirming the corrected revision saves a new report that becomes the draft's current
   report, and the earlier report remains as the superseded record.
 
-## History and summary flow
+## Patient switcher flow
+
+The caregiver can care for more than one person. Pill tabs list each patient plus **Add patient**. Switching loads that patient's own current draft, history, and remembered expressions; voice sessions re-mint with the selected patient's name, units, and vocabulary. Adding a patient takes only a name — no demographics the demo does not need.
+
+## History and export flow
 
 The caregiver can:
 
 - View current confirmed reports in reverse chronological order, with superseded revisions excluded by default.
 - See when a report was updated and open its earlier revisions when the audit trail is needed.
 - Open a report to see structured fields, original wording, observation time, and entry time.
-- Filter the summary by date range.
-- Generate a print-friendly summary showing measurements and observations chronologically.
-- Clearly distinguish caregiver-reported information from clinician-authored information.
+- Filter exports by date range.
+- Export the same confirmed reports three ways: a structured **doctor** summary to bring to the appointment, a plain-language **family** summary anyone can read, and **JSON/CSV files** so another caregiver or a clinic system can carry the data forward.
+- Print any text summary; download the files.
+- Clearly distinguish caregiver-reported information from clinician-authored information — every export carries the disclaimer.
 
 ## Essential interface states
 
 - Ready to speak.
-- Listening.
-- Processing.
+- Recording with live transcription.
+- Checking the recording.
 - Clarification needed.
 - Draft ready for review.
 - Correcting draft.

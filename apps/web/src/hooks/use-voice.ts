@@ -1,26 +1,22 @@
-// Browser voice session for the AssemblyAI Voice Agent API (client component).
+// Browser voice session: two stages.
 //
-// Flow: fetch a single-use token plus the server-built session config from
-// POST /api/voice/token, open wss://agents.assemblyai.com/v1/ws?token=..., send one
-// session.update with the inline configuration (no greeting — the session opens silently),
-// stream microphone PCM16 resampled to 24 kHz, play back reply.audio, and forward tool.call
-// frames to POST /api/drafts/:id/tool.
+//   Stage 1 — Voice note with live medical transcription (no turn-by-turn chat):
+//     mic -> MediaRecorder (backup blob) + AudioWorklet resample to 16 kHz PCM16
+//     -> AssemblyAI Streaming STT (domain medical-v1) over its own WebSocket.
+//     The caregiver sees live captions and speaks freely with pauses. Tapping
+//     Done sends Terminate, collects the finalized turns, and closes Stage 1.
+//     If streaming fails or hears nothing, the backup blob is transcribed via
+//     POST /api/voice/transcribe (async STT, also medical-v1).
+//   Stage 2 — Clarification with the Voice Agent API (turn-based conversation):
+//     the Stage 1 transcript is injected via conversation.message + reply.create
+//     into a Voice Agent WebSocket, which runs its normal tool-calling loop
+//     (update_draft, finish_draft, ask_caregiver).
 //
-// Audio runs at the device's own rate: the worklet resamples to 24 kHz in code, so capture
-// and echo cancellation work on every browser instead of assuming 24 kHz (which garbles
-// audio wherever the browser ignores the request).
+// Follow-up answers reuse Stage 1 (record -> live transcribe -> inject) on the
+// already-open Stage 2 session, so conversation context is preserved.
 //
-// Tool results are flushed only when reply.done is the latest event (interactive execution
-// mode); an interrupted turn drops its pending results, stale ones expire, and backend
-// rejections go back with is_error so the agent re-asks for one field instead of stalling.
-// A dropped socket resumes once via session.resume inside the 30 s grace window.
-// Sessions end cleanly with session.end so the resume window is not billed.
-//
-// Turn control is manual from the caregiver's point of view: Speak opens the mic, Done
-// stops audio leaving the browser (the session stays open), and the server finalizes the
-// turn on silence. There is no commit-turn event in the API, so Done is a mic gate plus a
-// reply.create watchdog fallback — both documented primitives. Cancel ends the session and
-// leaves the draft untouched; nothing is ever saved without the confirm button.
+// Tool results are flushed only when reply.done is the latest event; an interrupted turn
+// drops pending results. Sessions end cleanly with session.end.
 
 "use client";
 
@@ -29,15 +25,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 export type VoiceStatus =
   | "idle"
   | "requesting-mic"
-  | "connecting"
+  | "recording"      // MediaRecorder running locally — no streaming
+  | "transcribing"   // uploaded to STT API, waiting for transcript
+  | "connecting"     // opening voice agent WebSocket with transcript
   | "ready"
-  | "listening"
+  | "listening"      // caregiver recording a follow-up answer
   | "processing"
   | "error";
 
 export type VoiceTranscriptLine = { speaker: "you" | "agent"; text: string };
-
-type TurnDetection = { min_silence: number; max_silence: number; interrupt_response: boolean };
 
 type SessionConfig = {
   system_prompt: string;
@@ -55,11 +51,8 @@ type SessionConfig = {
 type TokenResponse = {
   token?: string;
   session?: SessionConfig;
-  turn?: { recording: TurnDetection; closing: TurnDetection };
   error?: { message?: string };
 };
-
-
 
 type PendingTool = { call_id: string; result: unknown; is_error: boolean; at: number };
 
@@ -72,23 +65,12 @@ function trace(...args: unknown[]): void {
 // Results older than this are never sent: the turn they belonged to is long gone.
 const PENDING_TOOL_TTL_MS = 90_000;
 const TARGET_SAMPLE_RATE = 24000;
-// After Done, silence closes the turn by itself. Only if nothing happens within this long
-// do we nudge the agent with reply.create — a fallback, never the primary path.
-const DONE_WATCHDOG_MS = 6_000;
+// Safety net: if reply.create after transcript injection gets no response in this long, warn.
+const DONE_WATCHDOG_MS = 12_000;
 
 const DONE_NUDGE =
-  "The caregiver tapped 'Done speaking'. Everything they said is final. Call update_draft " +
-  "with the complete note if you have not yet, then either read the readback (finish_draft) " +
-  "when complete or ask the first blocking question. One short question at a time.";
-
-function base64FromBytes(bytes: Uint8Array): string {
-  let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
-}
+  "The caregiver has finished speaking and is waiting. " +
+  "Call update_draft with everything you heard, then call finish_draft or ask one short blocking question.";
 
 function normalizeArguments(raw: unknown): Record<string, unknown> {
   if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw as Record<string, unknown>;
@@ -136,6 +118,13 @@ export function useVoiceSession(options: {
   const wsRef = useRef<WebSocket | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  // Stage 1 live medical transcription (separate from the Stage 2 agent socket).
+  const streamWsRef = useRef<WebSocket | null>(null);
+  const streamFinalsRef = useRef<string[]>([]);
+  const streamNodesRef = useRef<{ source: MediaStreamAudioSourceNode; worklet: AudioWorkletNode; gain: GainNode } | null>(null);
+  const streamLiveRef = useRef<string | null>(null);
   const playbackAtRef = useRef(0);
   const lastEventRef = useRef<string | null>(null);
   const pendingRef = useRef<PendingTool[]>([]);
@@ -148,31 +137,46 @@ export function useVoiceSession(options: {
   const liveUserTextRef = useRef<string | null>(null);
   const liveAgentIdRef = useRef<string | null>(null);
   const audioChunksRef = useRef(0);
-  // Mic gate: Done stops audio leaving the browser without closing tracks or session.
-  const sendingRef = useRef(false);
-  // Turn postures from the token response (single source: lib/voice.ts). Only the
-  // turn_detection field is ever sent mid-session, so immutable siblings stay untouched.
-  const turnRef = useRef<TokenResponse["turn"]>(null);
 
-  const retune = useCallback((which: "recording" | "closing") => {
-    const ws = wsRef.current;
-    const turn = which === "recording" ? turnRef.current?.recording : turnRef.current?.closing;
-    if (!turn || !ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ type: "session.update", session: { input: { turn_detection: turn } } }));
-    trace("turn_detection posture:", which, `min=${turn.min_silence} max=${turn.max_silence}`);
-  }, []);
   // Last sign of life after Done (transcript/tool/reply) and pending watchdog timers.
   const doneActivityRef = useRef(0);
   const watchdogRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  // Forward ref so start() (declared below) can kick off live streaming without a
+  // use-before-declaration cycle: assigned once startStreaming is defined.
+  const startStreamingRef = useRef<() => Promise<void>>(async () => undefined);
 
   const cleanup = useCallback(() => {
     stoppedRef.current = true;
+    // Stop any in-progress recording.
+    if (recorderRef.current && recorderRef.current.state !== "inactive") {
+      recorderRef.current.stop();
+    }
+    recorderRef.current = null;
+    chunksRef.current = [];
     try {
       wsRef.current?.close();
     } catch {
       // Socket already gone; nothing to close.
     }
     wsRef.current = null;
+    try {
+      streamWsRef.current?.close();
+    } catch {
+      // Streaming socket already gone.
+    }
+    streamWsRef.current = null;
+    streamFinalsRef.current = [];
+    streamLiveRef.current = null;
+    if (streamNodesRef.current) {
+      try {
+        streamNodesRef.current.worklet.disconnect();
+        streamNodesRef.current.source.disconnect();
+        streamNodesRef.current.gain.disconnect();
+      } catch {
+        // Nodes already torn down.
+      }
+      streamNodesRef.current = null;
+    }
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     if (audioCtxRef.current) {
@@ -185,7 +189,6 @@ export function useVoiceSession(options: {
     liveUserIdRef.current = null;
     liveUserTextRef.current = null;
     liveAgentIdRef.current = null;
-    sendingRef.current = false;
     for (const timer of watchdogRef.current) clearTimeout(timer);
     watchdogRef.current = [];
   }, []);
@@ -291,12 +294,7 @@ export function useVoiceSession(options: {
       if (type === "session.ready") {
         readyRef.current = true;
         if (typeof msg.session_id === "string") sessionIdRef.current = msg.session_id;
-        // Trust but verify: only consider the session fully working when the echoed
-        // config shows our transcription biasing actually applied.
-        const config = msg.config as { input?: { transcription_prompt?: string } } | undefined;
-        const ok = Boolean(config?.input?.transcription_prompt);
-        trace("session.ready, transcription config applied:", ok);
-        setVerified(ok);
+        trace("session.ready");
         setStatus("ready");
       } else if (type === "session.updated") {
         // Config acknowledgement; nothing to do.
@@ -478,108 +476,271 @@ export function useVoiceSession(options: {
     openSocketRef.current = openSocket;
   });
 
+
+  // Helper: get the best supported MediaRecorder MIME type.
+  function getBestMimeType(): string {
+    const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/ogg", ""];
+    return candidates.find((type) => !type || MediaRecorder.isTypeSupported(type)) ?? "";
+  }
+
+  // Phase 1 of the push-to-talk flow: get the mic, start a local MediaRecorder
+  // (backup blob) and live medical streaming (captions) together.
   const start = useCallback(async () => {
     if (!patientId) {
       setError("The demo session is still loading. Wait for it to be ready, then speak.");
       setStatus("error");
       return;
     }
-    // A fresh tap must never orphan the previous audio graph: a live mic plus its worklet
-    // would keep posting into the new socket, doubling the audio the server hears (garbled
-    // input the transcription then fails on). Tear everything down first.
     cleanup();
     stoppedRef.current = false;
     endedRef.current = false;
     resumeAttemptedRef.current = false;
     sessionIdRef.current = null;
+    chunksRef.current = [];
     setError(null);
     setDone(false);
-    sendingRef.current = false;
-    for (const timer of watchdogRef.current) clearTimeout(timer);
-    watchdogRef.current = [];
     setLines([]);
     setLiveUser(null);
     liveUserTextRef.current = null;
     liveUserIdRef.current = null;
     setLiveAgent(null);
     liveAgentIdRef.current = null;
-    setVerified(false);
     setStatus("requesting-mic");
 
     let stream: MediaStream;
     try {
-      // Echo cancellation on (the agent must not hear itself); noise suppression off
-      // (the server already denoises, and stacking a second layer hurts transcription).
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: false },
+        audio: { echoCancellation: true, noiseSuppression: true },
       });
     } catch {
-      setError("Microphone access was denied or is unavailable. Type your observation instead — it follows the same flow.");
+      setError("Microphone access was denied or is unavailable. Type your observation instead.");
       setStatus("error");
       return;
     }
     streamRef.current = stream;
 
-    setStatus("connecting");
-    let token: string;
-    let sessionConfig: SessionConfig;
+    // Create an AudioContext now so playback is ready when the agent responds later.
     try {
-      const response = await fetch(`/api/voice/token?patient_id=${encodeURIComponent(patientId)}`, { method: "POST" });
-      const payload = (await response.json()) as TokenResponse;
-      if (!response.ok || !payload.token || !payload.session) {
-        throw new Error(payload.error?.message ?? "The voice service could not start a session.");
-      }
-      token = payload.token;
-      sessionConfig = payload.session;
-      turnRef.current = payload.turn ?? null;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "The voice service could not start a session.");
-      setStatus("error");
-      stream.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-      return;
-    }
-
-    let audioCtx: AudioContext;
-    try {
-      // Device rate on purpose: the worklet resamples to 24 kHz, and only the default
-      // audio graph feeds every browser's echo canceller.
-      audioCtx = new AudioContext();
+      const audioCtx = new AudioContext();
       await audioCtx.resume();
-      await audioCtx.audioWorklet.addModule("/pcm-processor.js");
+      audioCtxRef.current = audioCtx;
+      playbackAtRef.current = audioCtx.currentTime;
     } catch {
-      setError("Audio could not start in this browser. Type your observation instead.");
-      setStatus("error");
-      stream.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
+      // Playback audio won't work but recording still can; don't block the flow.
+      trace("AudioContext failed to start — agent audio will be silent");
+    }
+
+    const mimeType = getBestMimeType();
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+    recorderRef.current = recorder;
+
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunksRef.current.push(e.data);
+    };
+
+    recorder.start(500); // collect chunks every 500 ms so we don't lose data on stop
+    setStatus("recording");
+    trace("MediaRecorder started, mimeType:", recorder.mimeType);
+    // Live medical captions start alongside the backup recording. Failures fall
+    // back to the backup blob silently.
+    streamFinalsRef.current = [];
+    void startStreamingRef.current();
+  }, [patientId, cleanup]);
+
+  // Helper: stop the recorder and return the complete audio Blob.
+  const stopRecorder = useCallback((): Promise<Blob> => {
+    return new Promise((resolve) => {
+      const recorder = recorderRef.current;
+      if (!recorder || recorder.state === "inactive") {
+        resolve(new Blob(chunksRef.current));
+        return;
+      }
+      recorder.onstop = () => {
+        const mimeType = recorder.mimeType || "audio/webm";
+        resolve(new Blob(chunksRef.current, { type: mimeType }));
+      };
+      recorder.stop();
+    });
+  }, []);
+
+  // Helper: POST audio blob to the STT endpoint and return the transcript.
+  const transcribeBlob = useCallback(async (blob: Blob): Promise<string> => {
+    const form = new FormData();
+    form.append("audio", blob, "recording.webm");
+    const response = await fetch("/api/voice/transcribe", { method: "POST", body: form });
+    const payload = (await response.json()) as { text?: string; error?: { message?: string } };
+    if (!response.ok) {
+      throw new Error(payload.error?.message ?? "Transcription failed.");
+    }
+    return payload.text ?? "";
+  }, []);
+
+  // Helper: fetch a token + session config for a fresh or resumed voice agent session.
+  const fetchToken = useCallback(async (): Promise<{ token: string; session: SessionConfig }> => {
+    const response = await fetch(`/api/voice/token?patient_id=${encodeURIComponent(patientId ?? "")}`, { method: "POST" });
+    const payload = (await response.json()) as TokenResponse;
+    if (!response.ok || !payload.token || !payload.session) {
+      throw new Error(payload.error?.message ?? "The voice service could not start a session.");
+    }
+    return { token: payload.token, session: payload.session };
+  }, [patientId]);
+
+  // Stage 1: open live medical transcription (Streaming STT, domain medical-v1).
+  // Runs alongside the MediaRecorder backup. Failures are silent by design: the
+  // backup blob + async fallback still produce a transcript after Done.
+  const startStreaming = useCallback(async () => {
+    const ctx = audioCtxRef.current;
+    const mic = streamRef.current;
+    if (!ctx || !mic || stoppedRef.current) return;
+    let token: string;
+    let streaming: {
+      sample_rate: number;
+      speech_model: string;
+      domain: string;
+      min_turn_silence: number;
+      max_turn_silence: number;
+      keyterms_prompt: string[];
+      prompt: string;
+    };
+    try {
+      const response = await fetch(`/api/voice/streaming-token?patient_id=${encodeURIComponent(patientId ?? "")}`, { method: "POST" });
+      const payload = (await response.json()) as { token?: string; streaming?: typeof streaming; error?: { message?: string } };
+      if (!response.ok || !payload.token || !payload.streaming) throw new Error(payload.error?.message ?? "streaming unavailable");
+      token = payload.token;
+      streaming = payload.streaming;
+    } catch (err) {
+      trace("live transcription unavailable, backup recording continues:", err instanceof Error ? err.message : err);
       return;
     }
-    audioCtxRef.current = audioCtx;
-    playbackAtRef.current = audioCtx.currentTime;
-
-    const source = audioCtx.createMediaStreamSource(stream);
-    const worklet = new AudioWorkletNode(audioCtx, "pcm-processor", {
-      processorOptions: { inputSampleRate: audioCtx.sampleRate, targetSampleRate: TARGET_SAMPLE_RATE },
+    try {
+      await ctx.audioWorklet.addModule("/pcm-processor.js");
+    } catch (err) {
+      trace("audio worklet failed, backup recording continues:", err instanceof Error ? err.message : err);
+      return;
+    }
+    if (stoppedRef.current) return;
+    const params = new URLSearchParams({
+      token,
+      sample_rate: String(streaming.sample_rate ?? 16000),
+      speech_model: streaming.speech_model ?? "universal-3-5-pro",
+      domain: streaming.domain ?? "medical-v1",
+      min_turn_silence: String(streaming.min_turn_silence ?? 800),
+      max_turn_silence: String(streaming.max_turn_silence ?? 3600),
     });
-    source.connect(worklet);
-    // Deliberately not connected to the destination: the microphone must not play back locally.
+    if (streaming.keyterms_prompt?.length) params.set("keyterms_prompt", JSON.stringify(streaming.keyterms_prompt));
+    if (streaming.prompt) params.set("prompt", streaming.prompt);
+    const ws = new WebSocket(`wss://streaming.assemblyai.com/v3/ws?${params.toString()}`);
+    streamWsRef.current = ws;
+    streamFinalsRef.current = [];
+    streamLiveRef.current = null;
 
-    let audioTraced = false;
-    worklet.port.onmessage = (event: MessageEvent) => {
-      const ws = wsRef.current;
-      // The mic gate: after Done, audio stays in the browser until the caregiver answers.
-      if (sendingRef.current && readyRef.current && ws && ws.readyState === WebSocket.OPEN) {
-        if (!audioTraced) {
-          audioTraced = true;
-          trace("mic flowing: first audio chunk sent");
-        }
-        ws.send(JSON.stringify({ type: "input.audio", audio: base64FromBytes(new Uint8Array(event.data as ArrayBuffer)) }));
+    ws.addEventListener("open", () => {
+      if (stoppedRef.current || streamWsRef.current !== ws) return;
+      trace("medical streaming open (medical-v1)");
+      try {
+        const source = ctx.createMediaStreamSource(mic);
+        const worklet = new AudioWorkletNode(ctx, "pcm-processor", {
+          processorOptions: { inputSampleRate: ctx.sampleRate, targetSampleRate: 16000 },
+        });
+        // Zero-gain sink: provably silent locally, provably pulled on every browser.
+        const gain = ctx.createGain();
+        gain.gain.value = 0;
+        source.connect(worklet);
+        worklet.connect(gain);
+        gain.connect(ctx.destination);
+        worklet.port.onmessage = (event: MessageEvent) => {
+          const socket = streamWsRef.current;
+          if (!socket || socket.readyState !== WebSocket.OPEN || stoppedRef.current) return;
+          const buffer = event.data as ArrayBuffer;
+          if (buffer.byteLength === 0) return;
+          socket.send(buffer);
+        };
+        streamNodesRef.current = { source, worklet, gain };
+      } catch (err) {
+        trace("streaming capture failed, backup continues:", err instanceof Error ? err.message : err);
       }
-    };
-    sendingRef.current = true;
+    });
 
-    await openSocket("fresh", sessionConfig, token);
-  }, [patientId, openSocket, cleanup]);
+    ws.addEventListener("message", (event) => {
+      let msg: { type?: string; transcript?: string; end_of_turn?: boolean } & Record<string, unknown>;
+      try {
+        msg = JSON.parse(event.data as string) as typeof msg;
+      } catch {
+        return;
+      }
+      if (msg.type === "Turn" && typeof msg.transcript === "string") {
+        if (msg.end_of_turn) {
+          const text = msg.transcript.trim();
+          streamLiveRef.current = null;
+          setLiveUser(null);
+          if (text) {
+            streamFinalsRef.current.push(text);
+            // Commit each finalized turn so a long note stays visible live.
+            setLines((prev) => [...prev, { speaker: "you", text }]);
+          }
+        } else {
+          streamLiveRef.current = msg.transcript;
+          setLiveUser(msg.transcript);
+        }
+      } else if (msg.type === "Termination") {
+        trace("medical streaming terminated");
+      }
+    });
+
+    ws.addEventListener("error", () => {
+      trace("medical streaming error, backup recording continues");
+    });
+  }, [patientId]);
+
+  // Stage 1 Done: terminate streaming, collect finalized turns (wait briefly for
+  // the last final), tear down capture nodes. Returns "" when nothing was heard.
+  const stopStreaming = useCallback(async (): Promise<string> => {
+    const ws = streamWsRef.current;
+    if (streamNodesRef.current) {
+      try {
+        streamNodesRef.current.worklet.disconnect();
+        streamNodesRef.current.source.disconnect();
+        streamNodesRef.current.gain.disconnect();
+      } catch {
+        // Already torn down.
+      }
+      streamNodesRef.current = null;
+    }
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      streamWsRef.current = null;
+      return streamFinalsRef.current.join(" ").trim();
+    }
+    const finalsBefore = streamFinalsRef.current.length;
+    try {
+      ws.send(JSON.stringify({ type: "Terminate" }));
+    } catch {
+      // Socket dying; fall through to collected finals.
+    }
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(resolve, 2500);
+      const check = setInterval(() => {
+        if (streamFinalsRef.current.length > finalsBefore || ws.readyState !== WebSocket.OPEN) {
+          clearInterval(check);
+          clearTimeout(timeout);
+          // Give the final Turn message one beat to arrive after Terminate.
+          setTimeout(resolve, 400);
+        }
+      }, 150);
+    });
+    try {
+      ws.close();
+    } catch {
+      // Already closing.
+    }
+    streamWsRef.current = null;
+    setLiveUser(null);
+    streamLiveRef.current = null;
+    return streamFinalsRef.current.join(" ").trim();
+  }, []);
+
+  useEffect(() => {
+    startStreamingRef.current = startStreaming;
+  });
 
   const armWatchdog = useCallback(() => {
     for (const timer of watchdogRef.current) clearTimeout(timer);
@@ -606,33 +767,129 @@ export function useVoiceSession(options: {
     );
   }, []);
 
-  // Done Speaking: stop audio leaving the browser; the session, mic, and draft stay open.
-  // Tighten the turn window at the same time so the finished turn closes within ~1 s
-  // instead of waiting out the long recording window.
-  const finishSpeaking = useCallback(() => {
-    if (!readyRef.current || stoppedRef.current) return;
-    sendingRef.current = false;
+  // Stage 1 Done -> Stage 2: stop streaming + recorder, prefer the live medical
+  // transcript, fall back to the backup blob, then inject into the voice agent.
+  // This is called when the caregiver taps "Done Speaking" for the first time.
+  const finishSpeaking = useCallback(async () => {
+    if (stoppedRef.current) return;
     setDone(true);
-    setLiveUser(null);
-    setStatus("processing");
-    trace("done speaking: mic gated, waiting for turn to close");
-    retune("closing");
-    armWatchdog();
-  }, [armWatchdog, retune]);
+    setStatus("transcribing");
+    trace("done speaking: stopping live medical transcription + recorder");
 
-  // Answer: re-open the mic gate and restore the patient window, so a follow-up answer
-  // streams on the same session and pauses are tolerated again.
-  const resumeSpeaking = useCallback(() => {
-    if (!readyRef.current || stoppedRef.current) return;
-    for (const timer of watchdogRef.current) clearTimeout(timer);
-    watchdogRef.current = [];
-    sendingRef.current = true;
+    // Tear down live streaming first so its finals are complete before we read them.
+    const streamed = await stopStreaming();
+    let blob: Blob;
+    try {
+      blob = await stopRecorder();
+    } catch {
+      setError("Could not read the recording. Please try again.");
+      setStatus("error");
+      return;
+    }
+
+    let transcript = streamed;
+    const streamedUsed = transcript.trim().length > 0;
+    if (!streamedUsed) {
+      if (blob.size === 0) {
+        setError("The recording appears to be empty. Make sure your microphone is working and try again.");
+        setStatus("error");
+        return;
+      }
+      try {
+        transcript = await transcribeBlob(blob);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Transcription failed. Please try again.");
+        setStatus("error");
+        return;
+      }
+    } else {
+      trace("live medical transcript used, chars:", transcript.length);
+    }
+
+    if (!transcript.trim()) {
+      setError("No speech was detected in the recording. Please speak clearly and try again.");
+      setStatus("error");
+      return;
+    }
+
+    trace("transcript received:", transcript.slice(0, 80));
+    if (!streamedUsed) {
+      // Fallback path only: live finals were already committed line-by-line during
+      // recording, so committing again would duplicate the note.
+      setLines((prev) => [...prev, { speaker: "you", text: transcript }]);
+    }
+
+    // Open the voice agent session (or reuse the existing one if it's still alive).
+    setStatus("connecting");
+    try {
+      const ws = wsRef.current;
+      const sessionAlive = ws && ws.readyState === WebSocket.OPEN && readyRef.current;
+      if (!sessionAlive) {
+        // No live session yet (first note, or session died): open a fresh one.
+        stoppedRef.current = false;
+        const { token, session } = await fetchToken();
+        await openSocket("fresh", session, token);
+        // Wait until session.ready fires (handleMessage sets readyRef and setStatus).
+        await new Promise<void>((resolve) => {
+          const interval = setInterval(() => {
+            if (readyRef.current || stoppedRef.current) {
+              clearInterval(interval);
+              resolve();
+            }
+          }, 100);
+        });
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The voice service could not start a session.");
+      setStatus("error");
+      return;
+    }
+
+    if (stoppedRef.current) return;
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      setError("The voice session dropped before the transcript could be sent. Please try again.");
+      setStatus("error");
+      return;
+    }
+
+    // Inject the transcript and ask the agent to respond.
+    ws.send(JSON.stringify({ type: "conversation.message", role: "user", content: transcript }));
+    ws.send(JSON.stringify({ type: "reply.create" }));
+    setStatus("processing");
+    trace("transcript injected, reply.create sent");
+    armWatchdog();
+  }, [armWatchdog, fetchToken, openSocket, stopRecorder, stopStreaming, transcribeBlob]);
+
+  // Answer: re-record a follow-up answer on the same open voice agent session.
+  // Same two-stage flow: live medical streaming + backup recording -> Done ->
+  // inject -> reply.create. Tapping Done again runs finishSpeaking, which reuses
+  // the open agent session.
+  const resumeSpeaking = useCallback(async () => {
+    if (stoppedRef.current) return;
+    const stream = streamRef.current;
+    if (!stream) {
+      setError("Microphone is no longer available. Tap Cancel and start again.");
+      setStatus("error");
+      return;
+    }
+    chunksRef.current = [];
+    streamFinalsRef.current = [];
     setDone(false);
     setError(null);
+
+    // Reuse the same mic stream; just start a new recorder + live streaming.
+    const mimeType = getBestMimeType();
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+    recorderRef.current = recorder;
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunksRef.current.push(e.data);
+    };
+    recorder.start(500);
     setStatus("listening");
-    trace("answering: mic gate open");
-    retune("recording");
-  }, [retune]);
+    trace("answering: recorder + live medical transcription restarted for follow-up");
+    void startStreaming();
+  }, [startStreaming]);
 
   // Cancel: end the session, leave the draft exactly as it is. Nothing is saved by this —
   // saving still requires the confirm button, so cancelling can never lose a saved report.
@@ -654,13 +911,12 @@ export function useVoiceSession(options: {
     lines,
     liveUser,
     liveAgent,
-    verified,
     done,
     start,
     stop,
     finishSpeaking,
     resumeSpeaking,
     cancelSpeaking,
-    connected: status !== "idle" && status !== "error",
+    connected: status !== "idle" && status !== "error" && status !== "recording" && status !== "transcribing",
   };
 }

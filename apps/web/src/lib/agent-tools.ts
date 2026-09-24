@@ -312,7 +312,7 @@ export async function handleAgentTool(
   }
 }
 
-// Typed-observation fallback (FR-015): the same sentence goes through rule-based extraction
+// Typed-observation fallback (FR-018): the same sentence goes through rule-based extraction
 // locally, then through the exact same backend resolution rules, so typed input cannot skip
 // validation. Used when microphone capture is unavailable.
 export async function submitTypedObservation(

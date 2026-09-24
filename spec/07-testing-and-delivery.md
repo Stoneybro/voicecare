@@ -21,12 +21,14 @@ Each test case shall have a reference record containing:
 | “Sugar is six point two” without a configured unit | Ask for the unit. |
 | “Seventy—sorry, seventy-two” | Use 72 and preserve the correction context. |
 | “She had pain yesterday, but none today” | Preserve time and negation. |
-| Personal expression used in a later session | Retrieve its meaning and include it in readback. |
+| Live streaming blocked mid-note | Fall back to the backup recording without losing the note. |
+| Personal expression used in a later session | Retrieve its meaning, skip the repeat question, and still include it in readback. |
 | “Her heart hurts” after learning “heart” as pulse | Record a symptom; do not create a heart-rate value. |
 | Correction after review | Create a new revision and require confirmation again. |
 | Connection loss before confirmation | Save no confirmed report. |
 | Repeated save request | Create one confirmed report. |
 | Unsupported observation | Preserve it as free text without inventing a category. |
+| Export the same reports three ways | Doctor, family, and file outputs agree with the confirmed data. |
 
 ## Measures
 
@@ -54,7 +56,7 @@ Each test case shall have a reference record containing:
 - Denied microphone permission offers a retry and a working typed-observation fallback.
 - Database or voice-service startup delay shows a clear loading state rather than a broken interface.
 - **Reset demo** produces a clean fictional workspace.
-- The print-friendly summary works from the deployed URL.
+- The doctor, family, and file exports render from the deployed URL and agree with each other.
 
 These gates establish demo readiness only.
 
@@ -83,11 +85,11 @@ These gates establish demo readiness only.
 - Draft revision state machine.
 - Explicit, idempotent save.
 
-### Build segment D: memory and history
+### Build segment D: memory, history, and exports
 
-- Personal-expression consent and retrieval.
-- Confirmed-report history.
-- Date-range summary and print view.
+- Personal-expression consent and retrieval (ask once, remember, never ask again).
+- Confirmed-report history per patient.
+- Date-range exports: doctor-structured, family plain-language, JSON/CSV files, plus print.
 - Session-scoped history and **Reset demo**.
 
 ### Build segment E: evaluation and presentation
@@ -116,10 +118,10 @@ Before submission, test the production URL in a private window and on at least o
 
 ### Required
 
-- Anonymous browser-scoped demo session and one fictional patient.
-- Voice capture, typed fallback, structured draft, clarification, and visual correction.
+- Anonymous browser-scoped demo session and fictional patients with add/switch.
+- Stage 1 voice-note recording with live medical transcription and Done handoff (plus typed fallback), Stage 2 turn-based clarification, structured draft, and visual correction.
 - Spoken and visible review, explicit confirmation, idempotent save, and session-scoped history.
-- Remembered expressions, printable summary, reset, and friendly loading, error, and retry states.
+- Remembered expressions, three exports (doctor / family / files), reset, and friendly loading, error, and retry states.
 
 ### Optional if time permits
 
@@ -138,14 +140,14 @@ Before submission, test the production URL in a private window and on at least o
 
 The presentation should demonstrate one continuous story:
 
-1. A caregiver gives several measurements and an observation naturally.
-2. The system asks about a missing unit.
+1. A caregiver records a voice note with live transcription, pauses and all, then taps Done.
+2. The agent asks about a missing unit — and nothing else.
 3. The caregiver corrects one value.
 4. The agent reads the revised draft back.
 5. The caregiver confirms and the report appears once in history.
 6. A personal expression is clarified and remembered with permission.
-7. A new session shows that memory working without bypassing review.
-8. The caregiver opens a print-friendly appointment summary.
+7. A new note shows that memory working — no repeat question — without bypassing review.
+8. The caregiver switches patients, then opens the three exports: doctor summary, family summary, JSON/CSV files.
 
 ## Open decisions
 

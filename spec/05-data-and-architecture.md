@@ -5,22 +5,25 @@
 ```text
 Browser UI
   ├─ anonymous secure session cookie
-  ├─ microphone capture, audio playback, and text fallback
-  ├─ visible draft and corrections
-  └─ history, printable summary, and demo reset
+  ├─ patient switcher (select / add)
+  ├─ Stage 1: mic capture + live medical captions + Done (text fallback)
+  ├─ Stage 2: agent conversation, visible draft and corrections
+  └─ history, doctor / family / file exports, and demo reset
           │
 VoiceCare backend
   ├─ demo-session isolation and fictional patient context
-  ├─ bootstrap, reset, and health endpoints
-  ├─ temporary AssemblyAI token endpoint
+  ├─ bootstrap, reset, patients, and health endpoints
+  ├─ streaming-token + voice-token endpoints (single-use, server-side key)
   ├─ draft validator and confirmation state
   ├─ idempotent report save
   └─ vocabulary retrieval and management
           │
-  ┌───────┴────────┐
-AssemblyAI       Database
-Voice Agent      reports, drafts,
-API              settings, expressions
+  ┌────────┴─────────┐
+AssemblyAI         Database
+Streaming STT      reports, drafts,
+(medical-v1)       patients, settings,
++ Voice Agent      expressions
+API
 ```
 
 ## Core entities
@@ -145,17 +148,21 @@ while `resolution_status` describes whether an individual item is ready for revi
 
 Suggested application endpoints:
 
-- `GET /api/bootstrap` — create or restore the browser's anonymous demo session and fictional patient.
+- `GET /api/bootstrap` — create or restore the browser's anonymous demo session and fictional patients.
 - `POST /api/reset` — abandon the current demo workspace and issue a clean isolated session.
 - `GET /api/health` — report application and database readiness without exposing secrets or sensitive details.
-- `POST /api/voice/token` — issue a short-lived browser token.
+- `POST /api/patients` — create a patient scoped to the demo-session caregiver.
+- `POST /api/voice/streaming-token` — issue a single-use Stage 1 token plus the medical-v1 streaming config.
+- `POST /api/voice/token` — issue a single-use Stage 2 Voice Agent token plus the session config.
+- `POST /api/voice/transcribe` — Stage 1 fallback: transcribe the backup blob with the medical domain.
 - `POST /api/drafts` — create a session draft.
+- `GET /api/drafts?patient_id=` — current draft for one patient (powers switching).
 - `PATCH /api/drafts/:id` — validate and apply a change only when `expected_revision` matches, then increment the revision and clear any confirmation.
 - `POST /api/drafts/:id/confirm` — confirm the draft's current revision; rejected when the draft is not reviewable.
 - `POST /api/drafts/:id/save` — idempotently save the confirmed revision and move `current_report_id`.
 - `GET /api/reports` — list current confirmed reports for a patient and date range.
 - `GET /api/reports/:id` — retrieve a report, including the revisions it superseded.
-- `GET /api/reports/summary` — render summary data for printing.
+- `GET /api/reports/summary` — summary data backing all three exports (rendered deterministically client-side, no LLM).
 - `GET /api/expressions` — list remembered expressions.
 - `POST /api/expressions` — store a separately approved expression.
 - `PATCH /api/expressions/:id` — correct an expression.
@@ -179,7 +186,7 @@ with the latest revision so the client can reload it.
    guarantee that one confirmed revision produces one report.
 5. A correction after saving increments the revision and requires confirmation again. The next save repeats the same two
    statements, so the pointer moves and the earlier report stays in place as the superseded record.
-6. History and the printable summary read current reports, so one observation appears exactly once.
+6. History and all three exports read current reports, so one observation appears exactly once.
 
 ## Validation rules
 
@@ -197,12 +204,12 @@ with the latest revision so the client can reload it.
 
 ## AssemblyAI integration
 
-- The backend stores the AssemblyAI API key.
-- The browser requests a temporary token immediately before connecting.
-- The session supplies a concise system prompt, transcription context, relevant key terms, and tool definitions.
+- The backend stores the AssemblyAI API key; the browser uses single-use tokens only.
+- Stage 1: the browser opens Streaming STT with the medical domain (`universal-3-5-pro`, `medical-v1`, caregiver key terms, 800/3600 ms turn tuning). Finals accumulate visibly; Done sends `Terminate`. The backup blob plus async transcription (same domain) covers streaming failures.
+- Stage 2: the browser opens the Voice Agent with a concise system prompt, transcription context, relevant key terms, and tool definitions; the Stage 1 transcript is injected and clarified turn-by-turn.
 - Tool calls update a server-side draft; they do not directly create confirmed reports.
-- The application records the AssemblyAI session ID for troubleshooting and retention management.
-- Voice Agent session artifacts are treated as separate from VoiceCare's confirmed report data.
+- The application records the AssemblyAI session IDs for troubleshooting and retention management.
+- Streaming and Voice Agent session artifacts are treated as separate from VoiceCare's confirmed report data.
 
 ## Database decision
 

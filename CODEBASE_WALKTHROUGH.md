@@ -11,25 +11,32 @@ disagree, the code wins.
 VoiceCare is a **monorepo** (one repository, two packages) managed with **pnpm workspaces**:
 
 - **`packages/shared`** — the brain. Plain TypeScript: word lists, number parsing, validation
-  rules, readback wording, and the voice-agent tool definitions. No database, no network.
+  rules, readback wording, deterministic exports, and the voice-agent tool definitions. No database, no network.
 - **`apps/web`** — a **Next.js** web app. Thin layer: API routes, a small browser UI, and the
-  browser voice client. It imports the brain for every decision.
+  two-stage voice client (Stage 1 live medical transcription, Stage 2 turn-based agent). It imports the brain for every decision.
 
 Data flows like this:
 
 ```
-Caregiver speaks or types
+Caregiver speaks a voice note (pauses welcome, no chat)
         │
         ▼
-Browser (records audio, shows text) ──► AssemblyAI (turns speech into words,
-        │                                runs the voice agent, calls tools)
-        │◄── tool calls ── forwards ──► Next.js API routes
-                                              │
-                    ┌─────────────────────────┼─────────────────────────┐
-                    ▼                         ▼                         ▼
-            shared rules               PostgreSQL              confirm + save
-         (is this complete?         (drafts, reports,        (only after the
-          what is missing?)           sessions, memory)        caregiver confirms)
+Stage 1: Streaming STT medical-v1 ──► live captions, finals accumulate
+        │                                    (+ backup recording + fallback)
+        │ Tap Done
+        ▼
+Stage 2: Voice Agent API ──► turn-based clarification ──► Next.js API routes
+        │◄── tool calls ── forwards ──►        │
+                                               │
+                     ┌─────────────────────────┼─────────────────────────┐
+                     ▼                         ▼                         ▼
+             shared rules               PostgreSQL              confirm + save
+          (is this complete?         (drafts, reports,        (only after the
+           what is missing?)           patients, sessions,     caregiver confirms)
+                                       memory)
+                                                     │
+                                                     ▼
+                                   doctor / family / JSON+CSV exports
 ```
 
 Golden rules the code enforces (you will see them everywhere below):
@@ -45,7 +52,7 @@ Golden rules the code enforces (you will see them everywhere below):
 - `corepack pnpm dev` — run the web app locally.
 - `corepack pnpm build` — production build (also runs the type checker).
 - `corepack pnpm lint` / `corepack pnpm typecheck` — code checks.
-- `corepack pnpm test` — runs the shared-package tests (28 tests).
+- `corepack pnpm test` — runs the shared-package tests (32 tests).
 
 You need `Node.js 24+` and `corepack` enabled. Environment variables live in
 `apps/web/.env.local` (see `apps/web/.env.example` for the list: AssemblyAI key, voice
@@ -223,12 +230,20 @@ finish_draft) with JSON Schema generated from the Zod schemas via `z.toJSONSchem
 schema errors into field-level messages ("measurements.0.source_text: Required") that help
 the agent recover.
 
-### 2.11 Tests
+### 2.11 `src/exports.ts` — deterministic multi-format exports (no LLM)
 
-`numbers.test.ts`, `resolve.test.ts`, `extract.test.ts`, `readback.test.ts` — 28 tests
+Pure functions over confirmed reports so doctor, family, and file exports can never
+diverge from saved data: `buildDoctorText` (SOAP-inspired Subjective/Objective, no
+diagnosis), `buildFamilyText` (plain language), `buildReportsCSV` (one row per
+measurement/observation), `buildReportsJSON` (full fidelity). `EXPORT_DISCLAIMER`
+travels with every format.
+
+### 2.12 Tests
+
+`numbers.test.ts`, `resolve.test.ts`, `extract.test.ts`, `readback.test.ts`, `exports.test.ts` — 32 tests
 covering the demo sentence end to end, self-corrections, negation across days, learned
 expressions (and the "heart hurts" guard), unsupported statements staying free text, silent
-unit assignments being refused, and snapshot-hash stability.
+unit assignments being refused, snapshot-hash stability, and deterministic doctor/family/CSV/JSON exports.
 
 ---
 
@@ -300,22 +315,16 @@ Next.js (App Router) + React + TypeScript. Config notes:
 
 ### 3.4 `src/lib/voice.ts` — AssemblyAI session support (server side)
 
-- `mintVoiceToken()`: `GET https://agents.assemblyai.com/v1/token` with
-  `expires_in_seconds` (redemption window, default 120 s) and
-  `max_session_duration_seconds` (default 600 s), key in the `Authorization` header.
-  Single-use tokens, fetched fresh per connection. Every failure maps to a speakable
-  "use the typed fallback" message.
-- `buildSystemPrompt(...)`: role + timezone + confirmed device units + remembered
-  expressions (each annotated "only when the sentence is about a measurement") + rules
-  (send exact-words `source_text`; never infer units; one question at a time; read back
-  `finish_draft` verbatim; **never claim anything is saved**; no diagnosis; emergencies →
-  local emergency services).
-- Transcription biasing: `transcription_prompt` (numbers, corrections, units, body parts,
-  time phrases) + `keyterms` (measurement words, patient name, remembered phrases, ≤50).
-- Session tuning for the demo: `transcription_mode: "min_latency"`, English only, silence
-  window 700/1500 ms with barge-in allowed, voice `alba`, PCM audio both directions.
-  (Latency/accuracy trade-off is stated in the file: misheard numbers stay safe because of
-  readback + explicit confirmation.)
+Two stages, two token types (both single-use, key never leaves the server):
+
+- **Stage 1 medical dictation:** `POST /api/voice/streaming-token` mints a Streaming STT
+  token (`GET https://streaming.assemblyai.com/v3/token`) and returns the streaming
+  config: `universal-3-5-pro`, `domain medical-v1`, caregiver keyterms, transcription
+  prompt, medical turn tuning (800/3600 ms). Pure recording + live transcription, no chat.
+- **Stage 2 clarification:** `mintVoiceToken()` (`GET https://agents.assemblyai.com/v1/token`,
+  120 s redemption / 600 s session) plus `buildSystemPrompt(...)`, `buildKeyTerms` (≤50),
+  `buildTranscriptionPrompt`, push-to-talk `RECORDING_TURN`/`ANSWER_TURN` (30 s/120 s,
+  never interrupt — the agent only speaks after Done via injected text).
 
 ### 3.5 `src/lib/agent-tools.ts` — the five tools, executed server-side
 
@@ -345,8 +354,12 @@ the agent recovers in one retry:
 | `GET /api/bootstrap?timezone=` | Create/restore demo session + fictional patient; home-screen payload |
 | `POST /api/reset` | Abandon workspace, issue a clean isolated session |
 | `GET /api/health` | App + database + voice readiness, no secrets |
-| `POST /api/voice/token?patient_id=` | Mint token, warm the DB, return token + session config |
+| `POST /api/voice/token?patient_id=` | Mint Voice Agent token, warm the DB, return token + session config |
+| `POST /api/voice/streaming-token?patient_id=` | Mint Streaming STT token + medical-v1 config for Stage 1 live captions |
+| `POST /api/voice/transcribe` | Stage 1 fallback: async STT with medical-v1 for the backup blob |
 | `POST /api/drafts` | Start a draft for the selected patient |
+| `GET /api/drafts?patient_id=` | Current draft for one patient (powers the patient switcher) |
+| `POST /api/patients` | Create a patient scoped to the demo-session caregiver |
 | `GET /api/drafts/:id` | Load a draft |
 | `PATCH /api/drafts/:id` | Caregiver correction (revision-guarded, clears confirmation) |
 | `POST /api/drafts/:id/tool` | Browser forwards one agent tool call; validates + executes |
@@ -361,32 +374,23 @@ the agent recovers in one retry:
 Every route (except the minimal health check) resolves the session server-side; dynamic
 routes await their params (Next.js 16 pattern).
 
-### 3.7 `src/hooks/use-voice.ts` — the browser voice client, step by step
+### 3.7 `src/hooks/use-voice.ts` — the two-stage browser voice client
 
-1. Tap Speak → open/create a draft (tool calls need a home) → mic permission
-   (`echoCancellation` on, `noiseSuppression` off — the server already denoises).
-2. `POST /api/voice/token` → single-use token + session config.
-3. `new AudioContext()` at the **device rate** (deliberately — only the default graph feeds
-   every browser's echo canceller) + `/pcm-processor.js` worklet with the real rates.
-4. Open `wss://agents.assemblyai.com/v1/ws?token=…`, send one `session.update`
-   (`system_prompt`, `tools`, `output`, `input` — no greeting, so the session opens silently).
-5. On `session.ready`: save `session_id` (for resume) and **verify** the echoed config shows
-   the transcription prompt applied (`verified` flag).
-6. Stream mic PCM (worklet → base64 `input.audio`) only while ready + socket open; play
-   `reply.audio` chunks chained on a playback clock (the context resamples to device rate
-   on output); render `transcript.user`/`transcript.agent` lines plus live partials
-   (deltas **replace** per item, never concatenate).
-7. `tool.call` → POST to our tool endpoint with the draft's current revision injected →
-   queue the result → send `tool.result` **only** when `reply.done` is latest (interrupted
-   turns drop theirs; anything older than 90 s expires). Backend errors go back with
-   `is_error: true` and a speakable message; a `stale_revision` rejection retries **once**
-   at the fresh revision automatically.
-8. Status line mirrors the session (`requesting-mic → connecting → ready → listening →
-   processing → Thinking…` on speech end); every event emits one quiet
-   `console.debug("[voicecare:voice]", …)` line, including tool POST outcomes — a stuck
-   call shows exactly where it stopped.
-9. Drops resume **once** via `session.resume` (fresh token) inside the 30 s grace window;
-   Stop / page-hide sends `session.end` first so nothing billable lingers.
+1. Tap Speak → load-or-create the selected patient's draft → mic permission.
+2. Stage 1 in parallel: MediaRecorder backup blob + live medical streaming
+   (`/api/voice/streaming-token` → `wss://streaming.assemblyai.com/v3/ws` with
+   medical-v1; AudioContext at device rate + `/pcm-processor.js` resampling to 16 kHz
+   through a zero-gain node; `Turn` finals committed line-by-line, partials as live text).
+3. Tap Done → `Terminate` the streaming session, prefer its finalized transcript,
+   fall back to `POST /api/voice/transcribe` (medical-v1) when streaming heard nothing.
+4. Stage 2: open/reuse the Voice Agent WebSocket (`?token=…`, one `session.update`,
+   no greeting), inject the transcript via `conversation.message` + `reply.create`;
+   `tool.call` → POST to our tool endpoint with the draft's current revision →
+   `tool.result` only when `reply.done` is latest (interrupted turns drop theirs).
+   Agent `reply.audio` plays on the device-rate context; `transcript.user`/`transcript.agent`
+   render as conversation lines.
+5. Follow-up answers repeat Stage 1 on the same mic stream and inject into the open
+   agent session. Cancel/Stop sends `session.end` first so nothing billable lingers.
 
 ### 3.8 `public/pcm-processor.js` — the resampler in plain words
 
@@ -397,17 +401,16 @@ next chunk so long sessions never drift.
 
 ### 3.9 `src/components/demo-app.tsx` — the minimal UI
 
-Two views, nothing else:
+Patient switcher on top (`[Rosa] [Mama] [+ Add]`), then two views:
 
 - **Home:** big round **Speak/Stop** button, one-line status, a scrolling conversation space
-  (lines + live partials + the to-confirm readback), tappable unit-option answers (the
-  typed-only path to answering), a single green **Confirm and save** card when reviewable
-  (with Retry after confirmation), a quiet **Type instead** toggle, and **History** /
+  (live medical captions + agent lines + the to-confirm readback), tappable unit-option answers,
+  a single green **Confirm and save** card when reviewable, a quiet **Type instead** toggle, and **History** /
   **Reset** buttons. Notices appear inline; the footer states the fictional-data prototype
   boundary.
 - **History:** saved reports (newest first), detail with original wording and
-  earlier/newer revision links, date-filtered printable appointment summary (print CSS
-  isolates `#print-summary`), remembered phrases with Forget.
+  earlier/newer revision links, **Exports tabs (Doctor / Family / Files)** rendering the same
+  confirmed reports deterministically (print buttons + JSON/CSV downloads), remembered phrases with Forget.
 - Wiring: `ensureDraft`, `answerIssue` (unit taps patch the stored item keeping spoken
   values; expression answers store-or-skip then resolve the issue), `confirmAndSave`
   (confirm → save with a fresh UUID key per revision; retries reuse it), `resetDemo`.
