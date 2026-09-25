@@ -1,54 +1,147 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
 
-:root {
-  --background: #f4f8f5;
-  --foreground: #16352f;
-}
+@custom-variant dark (&:is(.dark *));
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
+  --font-sans: var(--font-sans);
   --font-mono: var(--font-geist-mono);
+  --font-heading: var(--font-sans);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-* {
-  box-sizing: border-box;
+/* base-nova neutral scale, lightly tinted toward a calm teal (care/health mood). */
+:root {
+  --background: oklch(0.985 0.006 175);
+  --foreground: oklch(0.21 0.02 175);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.21 0.02 175);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.21 0.02 175);
+  --primary: oklch(0.46 0.07 175);
+  --primary-foreground: oklch(0.985 0.005 175);
+  --secondary: oklch(0.96 0.01 175);
+  --secondary-foreground: oklch(0.28 0.02 175);
+  --muted: oklch(0.962 0.008 175);
+  --muted-foreground: oklch(0.5 0.02 175);
+  --accent: oklch(0.945 0.02 168);
+  --accent-foreground: oklch(0.3 0.03 175);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.905 0.012 175);
+  --input: oklch(0.905 0.012 175);
+  --ring: oklch(0.55 0.06 175);
+  --chart-1: oklch(0.55 0.09 175);
+  --chart-2: oklch(0.65 0.11 150);
+  --chart-3: oklch(0.7 0.12 120);
+  --chart-4: oklch(0.75 0.1 65);
+  --chart-5: oklch(0.65 0.15 25);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0.006 175);
+  --sidebar-foreground: oklch(0.21 0.02 175);
+  --sidebar-primary: oklch(0.46 0.07 175);
+  --sidebar-primary-foreground: oklch(0.985 0.005 175);
+  --sidebar-accent: oklch(0.945 0.02 168);
+  --sidebar-accent-foreground: oklch(0.3 0.03 175);
+  --sidebar-border: oklch(0.905 0.012 175);
+  --sidebar-ring: oklch(0.55 0.06 175);
 }
 
+.dark {
+  --background: oklch(0.17 0.015 175);
+  --foreground: oklch(0.97 0.005 175);
+  --card: oklch(0.21 0.02 175);
+  --card-foreground: oklch(0.97 0.005 175);
+  --popover: oklch(0.21 0.02 175);
+  --popover-foreground: oklch(0.97 0.005 175);
+  --primary: oklch(0.8 0.08 170);
+  --primary-foreground: oklch(0.2 0.02 175);
+  --secondary: oklch(0.27 0.02 175);
+  --secondary-foreground: oklch(0.97 0.005 175);
+  --muted: oklch(0.26 0.02 175);
+  --muted-foreground: oklch(0.7 0.015 175);
+  --accent: oklch(0.3 0.025 170);
+  --accent-foreground: oklch(0.95 0.01 170);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.6 0.06 175);
+  --chart-1: oklch(0.65 0.1 175);
+  --chart-2: oklch(0.7 0.12 150);
+  --chart-3: oklch(0.75 0.13 120);
+  --chart-4: oklch(0.8 0.1 65);
+  --chart-5: oklch(0.7 0.15 25);
+  --sidebar: oklch(0.21 0.02 175);
+  --sidebar-foreground: oklch(0.97 0.005 175);
+  --sidebar-primary: oklch(0.8 0.08 170);
+  --sidebar-primary-foreground: oklch(0.2 0.02 175);
+  --sidebar-accent: oklch(0.3 0.025 170);
+  --sidebar-accent-foreground: oklch(0.95 0.01 170);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.6 0.06 175);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+/* VoiceCare: a very soft, calm wash behind the whole app. */
 body {
-  min-height: 100vh;
   background:
-    radial-gradient(circle at 8% 0%, rgba(181, 228, 211, 0.42), transparent 28rem),
-    radial-gradient(circle at 94% 8%, rgba(255, 231, 183, 0.32), transparent 24rem),
+    radial-gradient(circle at 8% 0%, color-mix(in oklch, var(--accent) 45%, transparent), transparent 26rem),
+    radial-gradient(circle at 94% 6%, color-mix(in oklch, var(--secondary) 60%, transparent), transparent 24rem),
     var(--background);
-  color: var(--foreground);
-  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
-}
-
-button,
-input,
-textarea {
-  font: inherit;
 }
 
 button:not(:disabled) {
   cursor: pointer;
 }
 
-:focus-visible {
-  outline: 3px solid rgba(13, 148, 116, 0.28);
-  outline-offset: 2px;
-}
-
 ::selection {
-  background: #bcebdc;
-  color: #0c493c;
+  background: color-mix(in oklch, var(--primary) 18%, transparent);
 }
 
+/* Recording CTA pulse; disabled for reduced-motion users. */
 @keyframes voice-pulse {
-  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(5, 150, 105, 0.22); }
-  50% { transform: scale(1.03); box-shadow: 0 0 0 14px rgba(5, 150, 105, 0); }
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--primary) 25%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 12px transparent;
+  }
 }
 
 .voice-pulse {
@@ -56,7 +149,9 @@ button:not(:disabled) {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .voice-pulse { animation: none; }
+  .voice-pulse {
+    animation: none;
+  }
 }
 
 /* The printed appointment summary shows only the summary section (FR-063). */
