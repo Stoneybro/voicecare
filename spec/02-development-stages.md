@@ -65,14 +65,14 @@ The schema is already designed. The app shell is a blank Next.js scaffold. Every
 
 | # | What | Detail |
 |---|------|--------|
-| 4.1 | `GET /api/agent-token` | Mints a single-use Voice Agent API token; includes system prompt + draft context |
-| 4.2 | Clarification agent prompt | Built server-side from `unresolved_issues`; asks one question, listens, updates draft |
+| 4.1 | `GET /api/agent-token?draft_id=...` | Mints a single-use Voice Agent API token and returns server-built session config; browser sends prompt/context in the initial `session.update` |
+| 4.2 | Clarification agent prompt | Built server-side from `unresolved_issues`; asks one question and submits the caregiver's answer through a tool call |
 | 4.3 | Voice agent screen | Animated listening UI; agent speaks question, caregiver responds, repeat |
 | 4.4 | `POST /api/drafts/:id/clarify` | Receives agent answer event; re-runs extraction on amended draft; updates `clarification_log` |
 | 4.5 | Turn loop | After each answer: re-evaluate issues → next question or → `REVIEWABLE` |
-| 4.6 | Skip/manual override | "Answer later" moves issue to unresolved; caregiver can still reach review screen |
+| 4.6 | Skip/manual override | "Finish and review" leaves unanswered issues unresolved and flagged; caregiver can return to clarification later |
 
-**Exit criteria:** Say "130 over 80" without units → agent asks "mmol/L or mg/dL?" → caregiver answers → issue resolved.
+**Exit criteria:** Say "glucose was 130" without units → agent asks "mg/dL or mmol/L?" → caregiver clarifies the unit → issue resolved. Blood pressure values use mmHg and should not trigger a glucose-unit question.
 
 ---
 

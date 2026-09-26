@@ -39,6 +39,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { RecordingScreen } from "@/components/recording-screen";
+import { ReviewScreen } from "@/components/review-screen";
 
 // The selected patient is remembered per browser so the judge lands on the same person (1.5).
 const LAST_PATIENT_KEY = "voicecare:last-patient-id";
@@ -73,6 +75,8 @@ export default function HomeScreen() {
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [newPatientName, setNewPatientName] = useState("");
   const [isAddingPatient, setIsAddingPatient] = useState(false);
+  const [recordingPatientId, setRecordingPatientId] = useState<string | null>(null);
+  const [reviewDraftId, setReviewDraftId] = useState<string | null>(null);
 
   // Cold start (1.3): the very first render fetches the workspace; the server creates the
   // demo session on that call and sets the cookie.
@@ -117,6 +121,11 @@ export default function HomeScreen() {
   const selectedPatient = useMemo(
     () => data?.patients.find((patient) => patient.id === selectedPatientId) ?? null,
     [data, selectedPatientId],
+  );
+
+  const recordingPatient = useMemo(
+    () => data?.patients.find((patient) => patient.id === recordingPatientId) ?? null,
+    [data, recordingPatientId],
   );
 
   async function handleAddPatient(): Promise<void> {
@@ -196,6 +205,24 @@ export default function HomeScreen() {
     );
   }
 
+  if (recordingPatient) {
+    return (
+      <RecordingScreen
+        patientId={recordingPatient.id}
+        patientName={recordingPatient.display_name}
+        onCancel={() => setRecordingPatientId(null)}
+        onSaved={(draftId) => {
+          setRecordingPatientId(null);
+          setReviewDraftId(draftId);
+        }}
+      />
+    );
+  }
+
+  if (reviewDraftId) {
+    return <ReviewScreen draftId={reviewDraftId} onBack={() => setReviewDraftId(null)} />;
+  }
+
   // __SPLIT_2__
   return (
     <main className="mx-auto flex w-full max-w-md flex-1 flex-col px-4 pt-6 pb-10">
@@ -235,7 +262,12 @@ export default function HomeScreen() {
           Speak naturally, like a voice note to yourself. VoiceCare turns it into a clear note
           for the doctor.
         </p>
-        <Button size="lg" className="voice-pulse mt-5 h-11 rounded-full px-6 text-base">
+        <Button
+          size="lg"
+          className="voice-pulse mt-5 h-11 rounded-full px-6 text-base"
+          onClick={() => selectedPatient && setRecordingPatientId(selectedPatient.id)}
+          disabled={!selectedPatient}
+        >
           <Mic data-icon="inline-start" aria-hidden />
           Speak about {selectedPatient?.display_name ?? "your loved one"}
         </Button>

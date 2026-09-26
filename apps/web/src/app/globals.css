@@ -148,8 +148,27 @@ button:not(:disabled) {
   animation: voice-pulse 1.8s ease-in-out infinite;
 }
 
+@keyframes waveform-bar {
+  0%,
+  100% {
+    height: 0.65rem;
+    opacity: 0.55;
+  }
+  50% {
+    height: var(--bar-height);
+    opacity: 1;
+  }
+}
+
+.waveform-bar {
+  height: 0.65rem;
+  animation: waveform-bar 720ms ease-in-out infinite;
+  animation-delay: calc(var(--bar-index) * -45ms);
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .voice-pulse {
+  .voice-pulse,
+  .waveform-bar {
     animation: none;
   }
 }
