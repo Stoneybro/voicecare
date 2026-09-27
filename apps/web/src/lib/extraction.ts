@@ -36,6 +36,8 @@ export type ExtractionResult = {
   unresolved_issues: UnresolvedIssue[];
 };
 
+import { applyPersonalExpressions, restorePersonalExpressionSources, type PersonalExpression } from "@/lib/expressions";
+
 type MatchValue = RegExpExecArray;
 
 function textForMatch(transcript: string, match: MatchValue): string {
@@ -193,15 +195,19 @@ function extractTime(transcript: string, timeZone: string, now: Date) {
 
 export function extractTranscript(
   transcript: string,
-  options: { timeZone: string; now?: Date },
+  options: { timeZone: string; now?: Date; personalExpressions?: PersonalExpression[] },
 ): ExtractionResult {
-  const normalized = transcript.replace(/\s+/g, " ").trim();
+  const expressions = options.personalExpressions ?? [];
+  const normalized = applyPersonalExpressions(transcript, expressions).replace(/\s+/g, " ").trim();
   const searchable = normalized.toLowerCase();
   const measurements: ExtractedMeasurement[] = [];
   const observations: ExtractedObservation[] = [];
   const unresolved_issues: UnresolvedIssue[] = [];
 
-  const bloodPressure = /\b(?:blood pressure|bp)\b(?:\s+(?:reading\s+)?(?:was|is|read|measured|at|of))?\s*(\d{2,3})\s*(?:over|\/)\s*(\d{2,3})\b/i.exec(normalized);
+  const bpAliases = expressions.filter((expression) => expression.normalized_meaning.measurement_type === "blood_pressure")
+    .map((expression) => expression.phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const bpAlias = bpAliases.length ? `(?:\\s+(?:${bpAliases.join("|")}))?` : "";
+  const bloodPressure = new RegExp(`\\b(?:blood pressure|bp)${bpAlias}\\b(?:\\s+(?:reading\\s+)?(?:was|is|read|measured|at|of))?\\s*(\\d{2,3})\\s*(?:over|/)\\s*(\\d{2,3})\\b`, "i").exec(normalized);
   if (bloodPressure) {
     const systolic = Number(bloodPressure[1]);
     const diastolic = Number(bloodPressure[2]);
@@ -225,7 +231,9 @@ export function extractTranscript(
   const glucose = /\b(?:(?:blood\s+)?(?:glucose|sugar)(?:\s+(?:level|reading))?)\b[^\d]{0,30}(\d+(?:\.\d+)?)\s*(mg\s*\/?\s*dl|milligrams?\s+per\s+deciliter|mmol\s*\/?\s*l|millimoles?\s+per\s+liter)?/i.exec(normalized);
   if (glucose) {
     const rawUnit = (glucose[2] ?? "").toLowerCase().replace(/\s+/g, " ").trim();
-    const unit = !rawUnit ? null : /mg|milligram/.test(rawUnit) ? "mg/dL" : "mmol/L";
+    const expressionUnit = expressions.find((expression) => expression.normalized_meaning.measurement_type === "blood_glucose" &&
+      expression.phrase && glucose[0].toLocaleLowerCase().includes(expression.phrase.toLocaleLowerCase()))?.normalized_meaning.unit;
+    const unit = !rawUnit ? expressionUnit ?? null : /mg|milligram/.test(rawUnit) ? "mg/dL" : "mmol/L";
     measurements.push({
       type: "blood_glucose",
       value: Number(glucose[1]),
@@ -253,7 +261,9 @@ export function extractTranscript(
   const temperature = /\b(?:temperature|temp)\b[^\d]{0,24}(\d{2,3}(?:\.\d+)?)\s*(?:°\s*)?(?:degrees?\s*)?(celsius|fahrenheit|c|f)?\b/i.exec(normalized);
   if (temperature) {
     const rawUnit = (temperature[2] ?? "").toLowerCase();
-    const unit = rawUnit ? (rawUnit.startsWith("c") ? "°C" : "°F") : null;
+    const expressionUnit = expressions.find((expression) => expression.normalized_meaning.measurement_type === "temperature" &&
+      expression.phrase && temperature[0].toLocaleLowerCase().includes(expression.phrase.toLocaleLowerCase()))?.normalized_meaning.unit;
+    const unit = rawUnit ? (rawUnit.startsWith("c") ? "°C" : "°F") : expressionUnit ?? null;
     measurements.push({ type: "temperature", value: Number(temperature[1]), unit, confidence: unit ? 0.9 : 0.72, source_text: textForMatch(normalized, temperature) });
     if (!unit) addIssue(unresolved_issues, {
       type: "missing_unit",
@@ -325,9 +335,9 @@ export function extractTranscript(
   });
 
   return {
-    measurements,
-    observations,
+    measurements: restorePersonalExpressionSources(measurements, expressions),
+    observations: restorePersonalExpressionSources(observations, expressions),
     ...time,
-    unresolved_issues,
+    unresolved_issues: restorePersonalExpressionSources(unresolved_issues, expressions),
   };
 }

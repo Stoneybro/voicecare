@@ -23,8 +23,8 @@ function unitFromAnswer(type: string, answer: string): string | null {
     if (/\b(?:mmol\s*\/?\s*l|millimoles? per liter)\b/i.test(answer)) return "mmol/L";
   }
   if (type === "temperature") {
-    if (/\b(?:celsius|degrees?\s*c|°\s*c)\b/i.test(answer)) return "°C";
-    if (/\b(?:fahrenheit|degrees?\s*f|°\s*f)\b/i.test(answer)) return "°F";
+    if (/\b(?:celsius|degrees?\s*c|°\s*c)\b/i.test(answer)) return "C";
+    if (/\b(?:fahrenheit|degrees?\s*f|°\s*f)\b/i.test(answer)) return "F";
   }
   return null;
 }

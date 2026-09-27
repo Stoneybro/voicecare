@@ -1,15 +1,16 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
-import { ArrowLeft, CircleAlert, LoaderCircle, Mic, MicOff } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowLeft, CircleAlert, LoaderCircle, Mic, MicOff, Sparkles } from "lucide-react";
 import { Orb, type AgentState } from "@/components/ui/orb";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
-type Props = { draftId: string; onBack: () => void; onReview: () => void };
+type Props = { draftId: string; mode?: "clarification" | "confirmation"; onBack: () => void; onReview: () => void };
 type VoiceConfig = { system_prompt: string; greeting: string; input: object; output: object; tools: object[] };
-type TokenPayload = { token: string; issue_id: string; question: string; session: VoiceConfig };
+type TokenPayload = { token: string; issue_id: string | null; mode: "clarification" | "confirmation"; question: string | null; session: VoiceConfig };
 type ToolCall = { call_id: string; name: string; arguments: { answer?: string } };
+type Suggestion = { suggestion_id: string; phrase: string; measurement_type: string; unit: string; patient_name: string };
 
 function messageFrom(payload: unknown, fallback: string): string {
   if (payload && typeof payload === "object" && "error" in payload && payload.error && typeof payload.error === "object" &&
@@ -49,10 +50,14 @@ function resampleTo24k(input: Float32Array, inputRate: number): ArrayBuffer {
   return output.buffer;
 }
 
-export function ClarificationScreen({ draftId, onBack, onReview }: Props) {
+export function ClarificationScreen({ draftId, mode = "clarification", onBack, onReview }: Props) {
   const [state, setState] = useState<AgentState>(null);
-  const [status, setStatus] = useState("Start when you're ready. VoiceCare will ask only about details that need clarification.");
+  const [status, setStatus] = useState(mode === "confirmation"
+    ? "Start when ready to hear the draft summary and confirm it by voice."
+    : "Start when you're ready. VoiceCare will ask only about details that need clarification.");
   const [error, setError] = useState<string | null>(null);
+  const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
+  const [savingSuggestion, setSavingSuggestion] = useState(false);
   const [busy, setBusy] = useState(false);
   const socketRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -61,7 +66,9 @@ export function ClarificationScreen({ draftId, onBack, onReview }: Props) {
   const playbackTimeRef = useRef(0);
   const readyRef = useRef(false);
   const issueIdRef = useRef("");
+  const sessionIdRef = useRef<string | null>(null);
   const pendingToolRef = useRef<ToolCall | null>(null);
+  const confirmationReplyRef = useRef(false);
 
   const cleanup = useCallback((endSession: boolean) => {
     readyRef.current = false;
@@ -79,12 +86,14 @@ export function ClarificationScreen({ draftId, onBack, onReview }: Props) {
     contextRef.current = null;
   }, []);
 
+  useEffect(() => () => cleanup(true), [cleanup]);
+
   const start = useCallback(async () => {
     setBusy(true);
     setError(null);
     try {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("Microphone access needs a secure browser connection.");
-      const response = await fetch(`/api/agent-token?draft_id=${encodeURIComponent(draftId)}`, { cache: "no-store" });
+      const response = await fetch(`/api/agent-token?draft_id=${encodeURIComponent(draftId)}&mode=${mode}`, { cache: "no-store" });
       const payload = await response.json().catch(() => null) as TokenPayload | null;
       if (!response.ok || !payload?.token || !payload.session) throw new Error(messageFrom(payload, "Voice clarification could not start."));
 
@@ -97,7 +106,7 @@ export function ClarificationScreen({ draftId, onBack, onReview }: Props) {
       socketUrl.searchParams.set("token", payload.token);
       const socket = new WebSocket(socketUrl);
       socketRef.current = socket;
-      issueIdRef.current = payload.issue_id;
+      issueIdRef.current = payload.issue_id ?? "";
       const source = audioContext.createMediaStreamSource(stream);
       const processor = audioContext.createScriptProcessor(4096, 1, 1);
       const silentGain = audioContext.createGain();
@@ -121,6 +130,7 @@ export function ClarificationScreen({ draftId, onBack, onReview }: Props) {
         let message: Record<string, unknown>;
         try { message = JSON.parse(String(event.data)) as Record<string, unknown>; } catch { return; }
         if (message.type === "session.ready") {
+          sessionIdRef.current = typeof message.session_id === "string" ? message.session_id : null;
           readyRef.current = true;
           setState("listening");
           setStatus("Listening. Answer the question whenever you're ready.");
@@ -138,7 +148,7 @@ export function ClarificationScreen({ draftId, onBack, onReview }: Props) {
           playbackTimeRef.current = Math.max(audioContext.currentTime, playbackTimeRef.current);
           player.start(playbackTimeRef.current);
           playbackTimeRef.current += buffer.duration;
-        } else if (message.type === "tool.call" && message.name === "submit_clarification_answer") {
+        } else if (message.type === "tool.call" && message.name === (mode === "confirmation" ? "confirm_draft" : "submit_clarification_answer")) {
           pendingToolRef.current = message as unknown as ToolCall;
           readyRef.current = false;
           setStatus("Saving your answer...");
@@ -149,14 +159,19 @@ export function ClarificationScreen({ draftId, onBack, onReview }: Props) {
           void (async () => {
             try {
               const answer = typeof tool.arguments?.answer === "string" ? tool.arguments.answer : "";
-              const saveResponse = await fetch(`/api/drafts/${encodeURIComponent(draftId)}/clarify`, {
+              const saveResponse = await fetch(mode === "confirmation"
+                ? `/api/drafts/${encodeURIComponent(draftId)}/confirm`
+                : `/api/drafts/${encodeURIComponent(draftId)}/clarify`, {
                 method: "POST",
                 headers: { "content-type": "application/json" },
-                body: JSON.stringify({ issue_id: issueIdRef.current, answer }),
+                body: JSON.stringify(mode === "confirmation"
+                  ? { method: "voice", answer, session_id: sessionIdRef.current }
+                  : { issue_id: issueIdRef.current, answer, session_id: sessionIdRef.current }),
               });
               const result = await saveResponse.json().catch(() => null);
               if (!saveResponse.ok) throw new Error(messageFrom(result, "That answer could not be saved."));
-              const nextIssueId = typeof result.next_issue_id === "string" ? result.next_issue_id : null;
+              if (mode === "clarification" && result?.expression_suggestion) setSuggestion(result.expression_suggestion as Suggestion);
+              const nextIssueId = mode === "clarification" && typeof result.next_issue_id === "string" ? result.next_issue_id : null;
               if (nextIssueId) issueIdRef.current = nextIssueId;
               socket.send(JSON.stringify({
                 type: "tool.result",
@@ -165,13 +180,20 @@ export function ClarificationScreen({ draftId, onBack, onReview }: Props) {
                   saved: true,
                   resolved: result.issue_resolved,
                   next_question: result.next_question,
-                  instruction: nextIssueId
-                    ? "If the current detail is resolved, ask the next question exactly as provided. If it remains unresolved, ask the same question again more simply."
-                    : "All blocking details are resolved. Tell the caregiver they can review the update now, then do not ask anything else.",
+                  instruction: mode === "confirmation"
+                    ? "The draft is confirmed. Thank the caregiver briefly, then finish the conversation."
+                    : nextIssueId
+                      ? "If the current detail is resolved, ask the next question exactly as provided. If it remains unresolved, ask the same question again more simply."
+                      : "All blocking details are resolved. Tell the caregiver they can review the update now, then do not ask anything else.",
                 }),
                 is_error: false,
               }));
-              setStatus(nextIssueId ? "Answer saved. Continuing with the next detail." : "All blocking details are clear. You can review the update.");
+              if (mode === "confirmation") {
+                confirmationReplyRef.current = true;
+                setStatus("Confirmation saved. Wrapping up...");
+              } else {
+                setStatus(nextIssueId ? "Answer saved. Continuing with the next detail." : "All blocking details are clear. You can review the update.");
+              }
               setState("listening");
               readyRef.current = true;
             } catch (cause) {
@@ -182,6 +204,10 @@ export function ClarificationScreen({ draftId, onBack, onReview }: Props) {
               readyRef.current = true;
             }
           })();
+        } else if (message.type === "reply.done" && confirmationReplyRef.current && !pendingToolRef.current) {
+          confirmationReplyRef.current = false;
+          cleanup(true);
+          onReview();
         } else if (message.type === "session.error" || message.type === "error") {
           readyRef.current = false;
           setError(typeof message.message === "string" ? message.message : "The voice session encountered an error.");
@@ -194,7 +220,7 @@ export function ClarificationScreen({ draftId, onBack, onReview }: Props) {
       socket.onerror = () => {
         setError("Could not connect to Voice Agent. Check microphone access and AssemblyAI Voice Agent account access.");
         setState(null);
-        cleanup(false);
+        cleanup(true);
       };
       socket.onclose = () => {
         if (readyRef.current) setError("The voice connection closed. You can return to the draft and try again.");
@@ -207,11 +233,31 @@ export function ClarificationScreen({ draftId, onBack, onReview }: Props) {
     } finally {
       setBusy(false);
     }
-  }, [cleanup, draftId]);
+  }, [cleanup, draftId, mode, onReview]);
 
   function finish(): void {
     cleanup(true);
     onReview();
+  }
+
+  async function rememberExpression(): Promise<void> {
+    if (!suggestion || savingSuggestion) return;
+    setSavingSuggestion(true);
+    try {
+      const response = await fetch("/api/expressions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ draft_id: draftId, suggestion_id: suggestion.suggestion_id }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(messageFrom(payload, "That phrase could not be remembered."));
+      setSuggestion(null);
+      setStatus(`I’ll remember “${suggestion.phrase}” for ${suggestion.patient_name}.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "That phrase could not be remembered.");
+    } finally {
+      setSavingSuggestion(false);
+    }
   }
 
   return (
@@ -219,20 +265,21 @@ export function ClarificationScreen({ draftId, onBack, onReview }: Props) {
       <header><Button variant="ghost" onClick={() => { cleanup(true); onBack(); }}><ArrowLeft data-icon="inline-start" aria-hidden />Back to review</Button></header>
       <section className="mt-8 flex flex-col items-center text-center">
         <div className="relative size-48"><Orb className="absolute inset-0" colors={["#64c8b8", "#a7e2d8"]} agentState={state} /></div>
-        <h1 className="mt-5 text-2xl font-semibold">Quick clarification</h1>
+        <h1 className="mt-5 text-2xl font-semibold">{mode === "confirmation" ? "Confirm by voice" : "Quick clarification"}</h1>
         <p className="mt-2 max-w-sm text-sm text-muted-foreground">{status}</p>
       </section>
       {error && <Card className="mt-6 border-destructive/40"><CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-sm"><CircleAlert className="size-4" aria-hidden />Voice session issue</CardTitle><CardDescription>{error}</CardDescription></CardHeader></Card>}
+      {suggestion && <Card className="mt-6 border-primary/30"><CardHeader className="pb-3"><CardTitle className="flex items-center gap-2 text-base"><Sparkles className="size-4" aria-hidden />Remember this?</CardTitle><CardDescription>Remember that “{suggestion.phrase}” means {suggestion.measurement_type.replaceAll("_", " ")} for {suggestion.patient_name}?</CardDescription></CardHeader><CardContent className="flex gap-2"><Button className="flex-1" onClick={() => void rememberExpression()} disabled={savingSuggestion}>{savingSuggestion ? "Saving…" : "Yes, remember"}</Button><Button variant="outline" onClick={() => setSuggestion(null)} disabled={savingSuggestion}>Not now</Button></CardContent></Card>}
       <Card className="mt-6"><CardContent className="flex flex-col gap-3 p-4">
         {!state ? (
           <Button size="lg" onClick={() => void start()} disabled={busy}>
             {busy ? <LoaderCircle className="animate-spin" data-icon="inline-start" aria-hidden /> : <Mic data-icon="inline-start" aria-hidden />}
-            {busy ? "Starting..." : "Start voice clarification"}
+            {busy ? "Starting..." : mode === "confirmation" ? "Hear the summary" : "Start voice clarification"}
           </Button>
         ) : (
           <Button size="lg" variant="outline" onClick={finish}><MicOff data-icon="inline-start" aria-hidden />Finish and review</Button>
         )}
-        <p className="text-center text-xs text-muted-foreground">You can stop at any time; unanswered details will stay flagged in your review.</p>
+        <p className="text-center text-xs text-muted-foreground">{mode === "confirmation" ? "Only a clear yes confirms. Say no to return and make corrections." : "You can stop at any time; unanswered details will stay flagged in your review."}</p>
       </CardContent></Card>
     </main>
   );

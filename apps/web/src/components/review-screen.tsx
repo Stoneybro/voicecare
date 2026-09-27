@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { ArrowLeft, CalendarClock, CircleAlert, ClipboardCheck, HeartPulse, LoaderCircle, Mic } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ArrowLeft, CalendarClock, CircleAlert, Check, ClipboardCheck, HeartPulse, LoaderCircle, Mic, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ClarificationScreen } from "@/components/clarification-screen";
+import { Input } from "@/components/ui/input";
 
 type Measurement = {
   type: string;
@@ -35,7 +36,7 @@ type Draft = {
   id: string;
   patient_name: string;
   revision: number;
-  status: "NEEDS_CLARIFICATION" | "REVIEWABLE";
+  status: "NEEDS_CLARIFICATION" | "REVIEWABLE" | "CONFIRMED";
   original_transcript: string;
   measurements: Measurement[];
   observations: Observation[];
@@ -43,9 +44,12 @@ type Draft = {
   observation_time_precision: string;
   observation_time_source: string | null;
   unresolved_issues: Issue[];
+  confirmation_method: "button" | "voice" | null;
+  confirmed_at: string | null;
+  confirmed_revision: number | null;
 };
 
-type ReviewScreenProps = { draftId: string; onBack: () => void };
+type ReviewScreenProps = { draftId: string; onBack: () => void; onSaved: (reportId: string) => void };
 
 const measurementLabels: Record<string, string> = {
   blood_pressure: "Blood pressure",
@@ -72,19 +76,26 @@ function responseError(payload: unknown): string {
   return "Could not load this draft. Please try again.";
 }
 
-function measurementValue(measurement: Measurement): string {
-  if (typeof measurement.value === "object" && measurement.value !== null) {
-    return `${measurement.value.systolic} / ${measurement.value.diastolic}`;
-  }
-  return String(measurement.value);
+function localDateTimeInput(value: string | null): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 }
 
-export function ReviewScreen({ draftId, onBack }: ReviewScreenProps) {
+export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [clarifying, setClarifying] = useState(false);
   const [reload, setReload] = useState(0);
+  const [agentMode, setAgentMode] = useState<"clarification" | "confirmation">("clarification");
+  const [measurements, setMeasurements] = useState<Measurement[]>([]);
+  const [observations, setObservations] = useState<Observation[]>([]);
+  const [observationTime, setObservationTime] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const idempotencyKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -93,7 +104,13 @@ export function ReviewScreen({ draftId, onBack }: ReviewScreenProps) {
         const response = await fetch(`/api/drafts/${encodeURIComponent(draftId)}`, { cache: "no-store" });
         const payload = await response.json().catch(() => null);
         if (!response.ok) throw new Error(responseError(payload));
-        if (active) setDraft(payload.draft as Draft);
+        if (active) {
+          const loaded = payload.draft as Draft;
+          setDraft(loaded);
+          setMeasurements(loaded.measurements);
+          setObservations(loaded.observations);
+          setObservationTime(localDateTimeInput(loaded.observation_time));
+        }
       } catch (cause) {
         if (active) setError(cause instanceof Error ? cause.message : "Could not load this draft.");
       } finally {
@@ -108,6 +125,7 @@ export function ReviewScreen({ draftId, onBack }: ReviewScreenProps) {
     return (
       <ClarificationScreen
         draftId={draftId}
+        mode={agentMode}
         onBack={() => { setClarifying(false); setReload((value) => value + 1); }}
         onReview={() => { setClarifying(false); setReload((value) => value + 1); }}
       />
@@ -135,6 +153,115 @@ export function ReviewScreen({ draftId, onBack }: ReviewScreenProps) {
   }
 
   const needsClarification = draft.status === "NEEDS_CLARIFICATION";
+  const confirmed = draft.status === "CONFIRMED";
+  const editable = !confirmed;
+  const loadedTime = localDateTimeInput(draft.observation_time);
+  const hasUnsavedChanges = JSON.stringify(measurements) !== JSON.stringify(draft.measurements) ||
+    JSON.stringify(observations) !== JSON.stringify(draft.observations) || observationTime !== loadedTime;
+
+  function updateMeasurement(index: number, patch: Partial<Measurement>): void {
+    setMeasurements((current) => current.map((measurement, currentIndex) => currentIndex === index ? { ...measurement, ...patch } : measurement));
+  }
+
+  async function persistCorrections(): Promise<string> {
+    const response = await fetch(`/api/drafts/${encodeURIComponent(draftId)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        measurements,
+        observations,
+        observation_time: observationTime ? new Date(observationTime).toISOString() : null,
+        observation_time_precision: observationTime ? "exact" : draft?.observation_time_precision ?? "unknown",
+        observation_time_source: observationTime ? "caregiver correction" : draft?.observation_time_source ?? null,
+      }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(responseError(payload));
+    return typeof payload.status === "string" ? payload.status : "NEEDS_CLARIFICATION";
+  }
+
+  async function saveCorrections(): Promise<void> {
+    setSaving(true);
+    setNotice(null);
+    try {
+      await persistCorrections();
+      setNotice("Corrections saved as a new draft revision.");
+      setReload((value) => value + 1);
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : "Could not save these corrections.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function confirmWithButton(): Promise<void> {
+    setSaving(true);
+    setNotice(null);
+    try {
+      if (hasUnsavedChanges) {
+        const updatedStatus = await persistCorrections();
+        if (updatedStatus !== "REVIEWABLE") {
+          setReload((value) => value + 1);
+          throw new Error("Corrections saved, but unresolved details still need clarification before confirmation.");
+        }
+      }
+      const response = await fetch(`/api/drafts/${encodeURIComponent(draftId)}/confirm`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ method: "button" }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(responseError(payload));
+      setNotice("Draft confirmed.");
+      setReload((value) => value + 1);
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : "Could not confirm this draft.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function startVoiceConfirmation(): Promise<void> {
+    setSaving(true);
+    setNotice(null);
+    try {
+      if (hasUnsavedChanges) {
+        const updatedStatus = await persistCorrections();
+        if (updatedStatus !== "REVIEWABLE") {
+          setReload((value) => value + 1);
+          throw new Error("Corrections saved, but unresolved details still need clarification before confirmation.");
+        }
+      }
+      setAgentMode("confirmation");
+      setClarifying(true);
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : "Could not prepare this draft for confirmation.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveReport(): Promise<void> {
+    setSaving(true);
+    setNotice(null);
+    try {
+      idempotencyKeyRef.current ??= typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${draftId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const response = await fetch("/api/reports", {
+        method: "POST",
+        headers: { "content-type": "application/json", "idempotency-key": idempotencyKeyRef.current },
+        body: JSON.stringify({ draft_id: draftId }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || typeof payload?.report_id !== "string") throw new Error(responseError(payload));
+      onSaved(payload.report_id);
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : "Could not save this report.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-2xl flex-col px-4 pb-10 pt-5 sm:px-6">
@@ -143,8 +270,8 @@ export function ReviewScreen({ draftId, onBack }: ReviewScreenProps) {
           <ArrowLeft data-icon="inline-start" aria-hidden />
           Workspace
         </Button>
-        <Badge variant={needsClarification ? "outline" : "secondary"}>
-          {needsClarification ? "Needs clarification" : "Ready to review"}
+        <Badge variant={needsClarification ? "outline" : confirmed ? "default" : "secondary"}>
+          {needsClarification ? "Needs clarification" : confirmed ? "Confirmed" : "Ready to review"}
         </Badge>
       </header>
 
@@ -181,9 +308,9 @@ export function ReviewScreen({ draftId, onBack }: ReviewScreenProps) {
             </ul>
           </div>
           <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-            <Button onClick={() => setClarifying(true)}>
+            {!confirmed && <Button onClick={() => { setAgentMode("clarification"); setClarifying(true); }}>
               <Mic data-icon="inline-start" aria-hidden />Clarify with voice
-            </Button>
+            </Button>}
             <p className="self-center text-xs text-muted-foreground">You can also leave these details flagged and review later.</p>
           </div>
         </section>
@@ -193,18 +320,26 @@ export function ReviewScreen({ draftId, onBack }: ReviewScreenProps) {
         <h2 id="measurements-heading" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Measurements
         </h2>
-        {draft.measurements.length ? (
+        {measurements.length ? (
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            {draft.measurements.map((measurement, index) => (
+            {measurements.map((measurement, index) => (
               <Card key={`${measurement.type}-${index}`}>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm">{measurementLabels[measurement.type] ?? measurement.type}</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <p className="text-2xl font-semibold tabular-nums">
-                    {measurementValue(measurement)}
-                    {measurement.unit && <span className="ml-2 text-sm font-normal text-muted-foreground">{measurement.unit}</span>}
-                  </p>
+                  {measurement.type === "blood_pressure" && typeof measurement.value === "object" ? (
+                    <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-2">
+                      <label className="text-xs text-muted-foreground">Systolic<Input aria-label="Systolic blood pressure" type="number" min="1" value={measurement.value.systolic} disabled={!editable} onChange={(event) => updateMeasurement(index, { value: { systolic: Number(event.target.value), diastolic: measurement.value && typeof measurement.value === "object" ? measurement.value.diastolic : 1 } })} /></label>
+                      <span className="pb-2 text-muted-foreground">/</span>
+                      <label className="text-xs text-muted-foreground">Diastolic<Input aria-label="Diastolic blood pressure" type="number" min="1" value={measurement.value.diastolic} disabled={!editable} onChange={(event) => updateMeasurement(index, { value: { systolic: measurement.value && typeof measurement.value === "object" ? measurement.value.systolic : 1, diastolic: Number(event.target.value) } })} /></label>
+                    </div>
+                  ) : (
+                    <label className="text-xs text-muted-foreground">Value<Input aria-label={`${measurementLabels[measurement.type] ?? measurement.type} value`} type="number" step="any" min="0.01" value={typeof measurement.value === "object" ? "" : measurement.value} disabled={!editable} onChange={(event) => updateMeasurement(index, { value: Number(event.target.value) })} /></label>
+                  )}
+                  <label className="mt-2 block text-xs text-muted-foreground">Unit
+                    <Input aria-label={`${measurementLabels[measurement.type] ?? measurement.type} unit`} value={measurement.unit ?? ""} placeholder="Enter unit" disabled={!editable} onChange={(event) => updateMeasurement(index, { unit: event.target.value.trim() || null })} />
+                  </label>
                   <p className="mt-2 text-xs text-muted-foreground">Extracted from: “{measurement.source_text}”</p>
                   <p className="mt-1 text-xs text-muted-foreground">Extraction confidence: {Math.round(measurement.confidence * 100)}%</p>
                 </CardContent>
@@ -220,13 +355,15 @@ export function ReviewScreen({ draftId, onBack }: ReviewScreenProps) {
         <h2 id="observations-heading" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Observations
         </h2>
-        {draft.observations.length ? (
+        {observations.length ? (
           <div className="mt-3 space-y-3">
-            {draft.observations.map((observation, index) => (
+            {observations.map((observation, index) => (
               <Card key={`${observation.type}-${index}`}>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm">{observationLabels[observation.type] ?? observation.type}</CardTitle>
-                  <CardDescription>{observation.description}</CardDescription>
+                  <CardDescription>
+                    <Input aria-label={`${observationLabels[observation.type] ?? observation.type} description`} value={observation.description} disabled={!editable} onChange={(event) => setObservations((current) => current.map((item, currentIndex) => currentIndex === index ? { ...item, description: event.target.value, source_text: event.target.value } : item))} />
+                  </CardDescription>
                 </CardHeader>
               </Card>
             ))}
@@ -248,11 +385,12 @@ export function ReviewScreen({ draftId, onBack }: ReviewScreenProps) {
               : "No time was stated."}
           </CardDescription>
         </CardHeader>
-        {draft.observation_time && (
-          <CardContent className="text-xs text-muted-foreground">
-            Interpreted as {new Date(draft.observation_time).toLocaleString()}
-          </CardContent>
-        )}
+        <CardContent>
+          <label className="text-xs text-muted-foreground">Observation date and time
+            <Input aria-label="Observation date and time" type="datetime-local" value={observationTime} disabled={!editable} onChange={(event) => setObservationTime(event.target.value)} />
+          </label>
+          {draft.observation_time && <p className="mt-2 text-xs text-muted-foreground">Currently interpreted as {new Date(draft.observation_time).toLocaleString()}</p>}
+        </CardContent>
       </Card>
 
       <Card className="mt-6">
@@ -264,6 +402,33 @@ export function ReviewScreen({ draftId, onBack }: ReviewScreenProps) {
         </CardHeader>
         <CardContent className="whitespace-pre-wrap text-sm leading-relaxed">{draft.original_transcript}</CardContent>
       </Card>
+
+      {notice && <p role="status" className="mt-4 text-center text-sm text-muted-foreground">{notice}</p>}
+      {!confirmed ? (
+        <div className="mt-5 flex flex-col gap-2 sm:flex-row">
+          <Button variant="outline" onClick={() => void saveCorrections()} disabled={saving || !hasUnsavedChanges}>
+            {saving ? <LoaderCircle className="animate-spin" data-icon="inline-start" aria-hidden /> : <Save data-icon="inline-start" aria-hidden />}
+            Save corrections
+          </Button>
+          <Button onClick={() => void confirmWithButton()} disabled={saving || needsClarification || draft.unresolved_issues.length > 0}>
+            <Check data-icon="inline-start" aria-hidden />Confirm draft
+          </Button>
+          <Button variant="outline" onClick={() => void startVoiceConfirmation()} disabled={saving || needsClarification || draft.unresolved_issues.length > 0}>
+            <Mic data-icon="inline-start" aria-hidden />Confirm by voice
+          </Button>
+        </div>
+      ) : (
+        <Card className="mt-5"><CardContent className="py-4 text-sm">
+        Confirmed by {draft.confirmation_method === "voice" ? "voice" : "button"}
+          {draft.confirmed_at ? ` on ${new Date(draft.confirmed_at).toLocaleString()}` : ""}
+          {draft.confirmed_revision ? ` (revision ${draft.confirmed_revision})` : ""}.
+        </CardContent></Card>
+      )}
+
+      {confirmed && <Button className="mt-3" onClick={() => void saveReport()} disabled={saving}>
+        {saving ? <LoaderCircle className="animate-spin" data-icon="inline-start" aria-hidden /> : <Save data-icon="inline-start" aria-hidden />}
+        Save report
+      </Button>}
 
       <p className="mt-5 text-center text-xs text-muted-foreground">
         This is an automatically organized draft, not a diagnosis or medical advice.

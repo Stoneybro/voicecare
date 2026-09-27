@@ -2,16 +2,19 @@ import { z } from "zod";
 import { amendTranscriptForClarification, type ClarificationIssue } from "@/lib/clarification";
 import { getSql } from "@/lib/db";
 import { extractTranscript } from "@/lib/extraction";
+import { detectExpressionSuggestion, loadPersonalExpressions } from "@/lib/expressions";
 import { ApiError, handle, jsonOk, readJson } from "@/lib/http";
 import { newId, requireSession } from "@/lib/session";
 
 const clarifySchema = z.object({
   issue_id: z.string().min(1).max(100),
   answer: z.string().trim().min(1).max(2_000),
+  session_id: z.string().max(200).optional(),
 });
 
 type DraftRow = {
   id: string;
+  patient_id: string;
   revision: number;
   status: string;
   original_transcript: string;
@@ -25,10 +28,10 @@ export async function POST(
   return handle(async () => {
     const session = await requireSession();
     const { id } = await context.params;
-    const { issue_id: issueId, answer } = await readJson(request, clarifySchema);
+    const { issue_id: issueId, answer, session_id: sessionId } = await readJson(request, clarifySchema);
     const sql = getSql();
     const rows = (await sql`
-      select id, revision, status, original_transcript, unresolved_issues
+      select id, patient_id, revision, status, original_transcript, unresolved_issues
       from drafts where id = ${id} and caregiver_id = ${session.caregiverId} limit 1
     `) as DraftRow[];
     const draft = rows[0];
@@ -41,11 +44,12 @@ export async function POST(
     if (!issue) throw new ApiError(409, "issue_already_resolved", "That detail is no longer waiting for clarification. Refresh the review.");
 
     const amendedTranscript = amendTranscriptForClarification(draft.original_transcript, issue, answer);
-    const extraction = extractTranscript(amendedTranscript, { timeZone: session.timezone });
+    const personalExpressions = await loadPersonalExpressions(session.caregiverId, draft.patient_id);
+    const extraction = extractTranscript(amendedTranscript, { timeZone: session.timezone, personalExpressions });
     const nextIssues = extraction.unresolved_issues;
     const nextStatus = nextIssues.length ? "NEEDS_CLARIFICATION" : "REVIEWABLE";
     const revisionId = newId("rev");
-    const clarificationEntry = {
+    const clarificationEntry: { [key: string]: unknown; resolved: boolean } = {
       issue_id: issue.id,
       issue_type: issue.type,
       question: issue.question,
@@ -53,6 +57,9 @@ export async function POST(
       recorded_at: new Date().toISOString(),
       resolved: !nextIssues.some((entry) => entry.id === issue.id),
     };
+    const memorySuggestion = detectExpressionSuggestion(`${draft.original_transcript}\n${answer}`);
+    if (memorySuggestion && clarificationEntry.resolved) clarificationEntry["memory_suggestion"] = memorySuggestion;
+    const patient = session.patients.find((entry) => entry.id === draft.patient_id);
 
     const updated = (await sql`
       with changed as (
@@ -67,6 +74,7 @@ export async function POST(
             observation_time_source = ${extraction.observation_time_source},
             unresolved_issues = ${JSON.stringify(nextIssues)}::jsonb,
             clarification_log = clarification_log || ${JSON.stringify([clarificationEntry])}::jsonb,
+            session_id = coalesce(${sessionId ?? null}, session_id),
             updated_at = now()
         where id = ${id} and caregiver_id = ${session.caregiverId}
           and revision = ${draft.revision} and status = 'NEEDS_CLARIFICATION'
@@ -110,6 +118,9 @@ export async function POST(
       observation_time_precision: updated[0].observation_time_precision,
       observation_time_source: updated[0].observation_time_source,
       clarification_log: updated[0].clarification_log,
+      expression_suggestion: memorySuggestion && clarificationEntry.resolved && patient
+        ? { ...memorySuggestion, patient_id: draft.patient_id, patient_name: patient.display_name }
+        : null,
     }, { headers: { "Cache-Control": "no-store, private" } });
   });
 }

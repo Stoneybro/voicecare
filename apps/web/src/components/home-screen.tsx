@@ -1,15 +1,15 @@
 "use client";
 
 // Stage 1 home screen (spec/02 stages 1.1, 1.2, 1.5, 1.7): cold-start workspace with no login,
-// a one-tap speak CTA around the voice orb, the patient switcher, an empty history state, and a
+// a one-tap speak CTA around the voice orb, the patient switcher, report history, and a
 // demo reset. All data comes from GET /api/bootstrap; the browser never touches the database.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   CalendarClock,
+  Brain,
   HeartPulse,
-  History,
   Mic,
   Plus,
   RotateCcw,
@@ -21,13 +21,6 @@ import { Orb } from "@/components/ui/orb";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -41,6 +34,8 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RecordingScreen } from "@/components/recording-screen";
 import { ReviewScreen } from "@/components/review-screen";
+import { ReportDetailScreen, ReportHistory } from "@/components/report-screens";
+import { PersonalExpressionsScreen } from "@/components/personal-expressions-screen";
 
 // The selected patient is remembered per browser so the judge lands on the same person (1.5).
 const LAST_PATIENT_KEY = "voicecare:last-patient-id";
@@ -77,6 +72,8 @@ export default function HomeScreen() {
   const [isAddingPatient, setIsAddingPatient] = useState(false);
   const [recordingPatientId, setRecordingPatientId] = useState<string | null>(null);
   const [reviewDraftId, setReviewDraftId] = useState<string | null>(null);
+  const [reportDetailId, setReportDetailId] = useState<string | null>(null);
+  const [expressionsOpen, setExpressionsOpen] = useState(false);
 
   // Cold start (1.3): the very first render fetches the workspace; the server creates the
   // demo session on that call and sets the cookie.
@@ -220,7 +217,23 @@ export default function HomeScreen() {
   }
 
   if (reviewDraftId) {
-    return <ReviewScreen draftId={reviewDraftId} onBack={() => setReviewDraftId(null)} />;
+    return <ReviewScreen
+      draftId={reviewDraftId}
+      onBack={() => setReviewDraftId(null)}
+      onSaved={(reportId) => {
+        setReviewDraftId(null);
+        setReportDetailId(reportId);
+        void loadWorkspace();
+      }}
+    />;
+  }
+
+  if (reportDetailId) {
+    return <ReportDetailScreen reportId={reportDetailId} onBack={() => setReportDetailId(null)} />;
+  }
+
+  if (expressionsOpen) {
+    return <PersonalExpressionsScreen onBack={() => setExpressionsOpen(false)} />;
   }
 
   // __SPLIT_2__
@@ -233,15 +246,16 @@ export default function HomeScreen() {
           </span>
           <span className="text-sm font-semibold tracking-tight">VoiceCare</span>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => void handleResetDemo()}
-          disabled={isResetting}
-        >
-          <RotateCcw data-icon="inline-start" aria-hidden />
-          Reset demo
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" size="sm" onClick={() => setExpressionsOpen(true)}>
+            <Brain data-icon="inline-start" aria-hidden />
+            Remembered phrases
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => void handleResetDemo()} disabled={isResetting}>
+            <RotateCcw data-icon="inline-start" aria-hidden />
+            Reset demo
+          </Button>
+        </div>
       </header>
 
       {/* Hero: one message, one primary action (spec/01 MVP bar). */}
@@ -317,7 +331,7 @@ export default function HomeScreen() {
         </div>
       </section>
 
-      {/* History (1.2). Stage 5 replaces this empty state with real saved reports. */}
+      {/* Stage 6: saved reports are scoped to the selected patient. */}
       <section className="mt-8">
         <div className="flex items-center justify-between">
           <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
@@ -325,23 +339,11 @@ export default function HomeScreen() {
           </h2>
           <Badge variant="secondary">{data.reports_count} saved</Badge>
         </div>
-        <Card className="mt-3">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-sm">
-              <History className="size-4 text-muted-foreground" aria-hidden />
-              No notes yet
-            </CardTitle>
-            <CardDescription>
-              Notes you save will appear here, newest first, ready to share with the doctor.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="flex items-center gap-2 text-xs text-muted-foreground">
-              <CalendarClock className="size-3.5" aria-hidden />
-              Demo session expires {new Date(data.session.expires_at).toLocaleString()}
-            </p>
-          </CardContent>
-        </Card>
+        <ReportHistory patientId={selectedPatient?.id ?? null} onSelect={setReportDetailId} />
+        <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+          <CalendarClock className="size-3.5" aria-hidden />
+          Demo session expires {new Date(data.session.expires_at).toLocaleString()}
+        </p>
       </section>
 
       <Dialog
