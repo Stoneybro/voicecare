@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label";
 type CareNoteWorkspaceProps = {
   patientId: string;
   patientName: string;
+  startOnMount: boolean;
   onCancel: () => void;
   onSaved: (reportId: string) => void;
 };
@@ -25,6 +26,8 @@ type SttMessage = {
   turn_order?: number;
   error?: string;
 };
+
+const MAX_BUFFERED_AUDIO_CHUNKS = 128;
 
 function errorMessage(payload: unknown, fallback: string): string {
   if (
@@ -59,13 +62,13 @@ function resampleToPcm16(input: Float32Array, inputRate: number, outputRate: num
   return pcm.buffer;
 }
 
-export function CareNoteWorkspace({ patientId, patientName, onCancel, onSaved }: CareNoteWorkspaceProps) {
+export function CareNoteWorkspace({ patientId, patientName, startOnMount, onCancel, onSaved }: CareNoteWorkspaceProps) {
   const [reviewDraftId, setReviewDraftId] = useState<string | null>(null);
   const [reviewBusy, setReviewBusy] = useState(false);
-  const [mode, setMode] = useState<ScreenMode>("ready");
+  const [mode, setMode] = useState<ScreenMode>(startOnMount ? "connecting" : "ready");
   const [transcript, setTranscript] = useState("");
   const [typedTranscript, setTypedTranscript] = useState("");
-  const [statusMessage, setStatusMessage] = useState("");
+  const [statusMessage, setStatusMessage] = useState(startOnMount ? "Preparing your recording…" : "");
   const draftIdRef = useRef<string | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -76,6 +79,9 @@ export function CareNoteWorkspace({ patientId, patientName, onCancel, onSaved }:
   const disposedRef = useRef(false);
   const savingRef = useRef(false);
   const transcriptRef = useRef("");
+  const autoStartRequestedRef = useRef(false);
+  const pendingAudioRef = useRef<ArrayBuffer[]>([]);
+  const audioBufferFailedRef = useRef(false);
 
   const updateTranscript = useCallback(() => {
     const finalized = [...finalTurnsRef.current.entries()]
@@ -89,6 +95,7 @@ export function CareNoteWorkspace({ patientId, patientName, onCancel, onSaved }:
   }, []);
 
   const stopAudio = useCallback(async (sendTerminate = true) => {
+    pendingAudioRef.current = [];
     const processor = processorRef.current;
     if (processor) {
       processor.onaudioprocess = null;
@@ -121,6 +128,40 @@ export function CareNoteWorkspace({ patientId, patientName, onCancel, onSaved }:
     [stopAudio],
   );
 
+  const beginAudioCapture = useCallback(async (stream: MediaStream): Promise<void> => {
+    const context = new AudioContext();
+    audioContextRef.current = context;
+    await context.resume();
+    if (disposedRef.current) return;
+
+    const source = context.createMediaStreamSource(stream);
+    const processor = context.createScriptProcessor(8192, 1, 1);
+    processorRef.current = processor;
+    processor.onaudioprocess = (event) => {
+      if (disposedRef.current || audioBufferFailedRef.current) return;
+      const input = event.inputBuffer.getChannelData(0);
+      const output = event.outputBuffer.getChannelData(0);
+      output.fill(0);
+      const audio = resampleToPcm16(input, context.sampleRate, 16_000);
+      const socket = socketRef.current;
+
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(audio);
+        return;
+      }
+      if (socket && socket.readyState !== WebSocket.CONNECTING) return;
+      if (pendingAudioRef.current.length >= MAX_BUFFERED_AUDIO_CHUNKS) {
+        audioBufferFailedRef.current = true;
+        void switchToFallback("Transcription took too long to connect. Your speech was not transcribed. Try the microphone again or type your update.");
+        return;
+      }
+      pendingAudioRef.current.push(audio);
+    };
+    source.connect(processor);
+    processor.connect(context.destination);
+    setStatusMessage("You can speak now. Your audio is held briefly while transcription connects.");
+  }, [switchToFallback]);
+
   useEffect(() => {
     return () => {
       disposedRef.current = true;
@@ -131,7 +172,7 @@ export function CareNoteWorkspace({ patientId, patientName, onCancel, onSaved }:
     };
   }, [stopAudio]);
 
-  async function createDraft(): Promise<string> {
+  const createDraft = useCallback(async (): Promise<string> => {
     const response = await fetch("/api/drafts", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -143,43 +184,60 @@ export function CareNoteWorkspace({ patientId, patientName, onCancel, onSaved }:
     }
     draftIdRef.current = payload.draft_id;
     return payload.draft_id;
-  }
+  }, [patientId]);
 
-  async function startRecording(): Promise<void> {
-    if (mode !== "ready" && mode !== "fallback") return;
+  const startRecording = useCallback(async (automatic = false): Promise<void> => {
+    if (automatic) {
+      if (autoStartRequestedRef.current) return;
+      autoStartRequestedRef.current = true;
+    } else if (mode !== "ready" && mode !== "fallback") {
+      return;
+    }
     disposedRef.current = false;
+    audioBufferFailedRef.current = false;
+    pendingAudioRef.current = [];
     setMode("connecting");
-    setStatusMessage("Preparing a secure recording…");
+    setStatusMessage("Requesting microphone access…");
 
-    // Ask for the microphone directly from this click so browsers can show their permission UI.
+    // Request the microphone as soon as the recording workspace opens.
     const mediaPromise = navigator.mediaDevices?.getUserMedia
       ? navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })
       : Promise.reject(new Error("This browser cannot access a microphone."));
+    const capturePromise = mediaPromise.then(async (stream) => {
+      if (disposedRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return stream;
+      }
+      mediaStreamRef.current = stream;
+      await beginAudioCapture(stream);
+      return stream;
+    });
     const draftPromise = draftIdRef.current ? Promise.resolve(draftIdRef.current) : createDraft();
-    const [draftResult, mediaResult] = await Promise.allSettled([draftPromise, mediaPromise]);
+    const [draftResult, mediaResult] = await Promise.allSettled([draftPromise, capturePromise]);
 
     if (disposedRef.current) {
-      if (mediaResult.status === "fulfilled") mediaResult.value.getTracks().forEach((track) => track.stop());
+      await stopAudio(false);
       if (draftResult.status === "fulfilled") {
         await fetch(`/api/drafts/${encodeURIComponent(draftResult.value)}`, { method: "DELETE" }).catch(() => undefined);
       }
       return;
     }
 
+    if (audioBufferFailedRef.current) return;
+
     if (draftResult.status === "rejected") {
-      if (mediaResult.status === "fulfilled") mediaResult.value.getTracks().forEach((track) => track.stop());
+      await stopAudio(false);
       setMode("ready");
       setStatusMessage(draftResult.reason instanceof Error ? draftResult.reason.message : "Could not start this update.");
       return;
     }
 
     if (mediaResult.status === "rejected") {
-      await switchToFallback("Microphone access is unavailable. Type what you want to record below.");
+      await stopAudio(false);
+      const message = mediaResult.reason instanceof Error ? mediaResult.reason.message : "Microphone access is unavailable.";
+      await switchToFallback(`${message} Type what you want to record below.`);
       return;
     }
-
-    const stream = mediaResult.value;
-    mediaStreamRef.current = stream;
 
     try {
       setStatusMessage("Connecting to live transcription…");
@@ -202,9 +260,16 @@ export function CareNoteWorkspace({ patientId, patientName, onCancel, onSaved }:
         const connectionTimeout = window.setTimeout(() => reject(new Error("The transcription service took too long to connect.")), 12_000);
         let connected = false;
         socket.onopen = () => {
-          connected = true;
-          window.clearTimeout(connectionTimeout);
-          resolve();
+          try {
+            for (const audio of pendingAudioRef.current) socket.send(audio);
+            pendingAudioRef.current = [];
+            connected = true;
+            window.clearTimeout(connectionTimeout);
+            resolve();
+          } catch {
+            window.clearTimeout(connectionTimeout);
+            reject(new Error("Could not send the audio captured while transcription connected."));
+          }
         };
         socket.onerror = () => {
           window.clearTimeout(connectionTimeout);
@@ -254,28 +319,19 @@ export function CareNoteWorkspace({ patientId, patientName, onCancel, onSaved }:
         throw new Error("Live transcription disconnected before recording began.");
       }
 
-      const context = new AudioContext();
-      audioContextRef.current = context;
-      await context.resume();
-      const source = context.createMediaStreamSource(stream);
-      const processor = context.createScriptProcessor(8192, 1, 1);
-      processorRef.current = processor;
-      processor.onaudioprocess = (event) => {
-        if (socket.readyState !== WebSocket.OPEN) return;
-        const input = event.inputBuffer.getChannelData(0);
-        const output = event.outputBuffer.getChannelData(0);
-        output.fill(0);
-        socket.send(resampleToPcm16(input, context.sampleRate, 16_000));
-      };
-      source.connect(processor);
-      processor.connect(context.destination);
       setStatusMessage("Listening. Speak naturally; you can pause whenever you need.");
       setMode("live");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Live transcription could not start.";
-      await switchToFallback(`${message} Type your update below to continue.`);
+      await switchToFallback(`${message} Your speech was not transcribed. Try the microphone again or type your update.`);
     }
-  }
+  }, [beginAudioCapture, createDraft, mode, stopAudio, switchToFallback, updateTranscript]);
+
+  useEffect(() => {
+    if (!startOnMount) return;
+    const timer = window.setTimeout(() => void startRecording(true), 0);
+    return () => window.clearTimeout(timer);
+  }, [startOnMount, startRecording]);
 
   async function startTextEntry(): Promise<void> {
     setMode("connecting");
@@ -412,6 +468,7 @@ export function CareNoteWorkspace({ patientId, patientName, onCancel, onSaved }:
               ))}
             </div>
           )}
+
         </section>
 
         <div className="flex min-w-0 flex-1 flex-col lg:min-h-[min(68vh,44rem)]">
@@ -422,7 +479,7 @@ export function CareNoteWorkspace({ patientId, patientName, onCancel, onSaved }:
               {mode === "fallback" ? "Type your update" : "Live transcript"}
             </CardTitle>
             <CardDescription>
-              {mode === "fallback" ? "Write it as you would say it. You can check the details next." : "Your words, as you say them. There is time to review everything next."}
+              {mode === "fallback" ? "Write it as you would say it. You can check the details next." : "Speak at your own pace. VoiceCare listens without interrupting."}
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-1 flex-col pb-4">
@@ -432,7 +489,7 @@ export function CareNoteWorkspace({ patientId, patientName, onCancel, onSaved }:
                 <textarea
                   id="fallback-transcript"
                   className="min-h-36 flex-1 resize-y rounded-lg border border-input bg-background px-3 py-2 text-base leading-relaxed shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40"
-                  placeholder={`For example: ${patientName} had breakfast and said they felt tired this morning.`}
+                  placeholder={`Yesterday morning, ${patientName}’s blood pressure was 128 over 82 and their blood sugar was 6.5. They said their knee hurt when standing.`}
                   maxLength={30_000}
                   value={typedTranscript}
                   onChange={(event) => setTypedTranscript(event.target.value)}
@@ -444,10 +501,13 @@ export function CareNoteWorkspace({ patientId, patientName, onCancel, onSaved }:
                   {displayedTranscript ? (
                     displayedTranscript
                   ) : (
-                  <p className="text-muted-foreground">
-                    {mode === "live" ? "I'll show each phrase here as you speak…" : mode === "connecting" ? "Your live transcript will appear here." : "Start with how they are feeling, a measurement, or something you noticed today."}
-                  </p>
-                )}
+                  <div className="max-w-xl text-muted-foreground/75">
+                    <p className="mb-2 text-xs font-medium not-italic">Fictional example · Try saying:</p>
+                    <p className="text-sm italic leading-relaxed">
+                      Yesterday morning, {patientName}’s blood pressure was 128 over 82 and their blood sugar was 6.5. They said their knee hurt when standing.
+                    </p>
+                  </div>
+                  )}
               </div>
             )}
           </CardContent>

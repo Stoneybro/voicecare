@@ -6,7 +6,6 @@ import { useEffect, useRef, useState } from "react";
 import { CalendarClock, CircleAlert, Check, ClipboardCheck, LoaderCircle, Mic, Save, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { VoiceAssistantPanel } from "@/components/clarification-screen";
 import { Input } from "@/components/ui/input";
 
@@ -54,7 +53,6 @@ type ExpressionCandidate = {
 type Draft = {
   id: string;
   patient_name: string;
-  revision: number;
   status: "NEEDS_CLARIFICATION" | "REVIEWABLE" | "CONFIRMED" | "SAVED";
   original_transcript: string;
   measurements: Measurement[];
@@ -63,9 +61,7 @@ type Draft = {
   observation_time_precision: string;
   observation_time_source: string | null;
   unresolved_issues: Issue[];
-  confirmation_method: "button" | "voice" | null;
   confirmed_at: string | null;
-  confirmed_revision: number | null;
 };
 
 type NoteReviewProps = { draftId: string; onSaved: (reportId: string) => void; onBusyChange: (busy: boolean) => void };
@@ -102,6 +98,15 @@ function localDateTimeInput(value: string | null): string {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 }
 
+function measurementSummary(measurement: Measurement): string {
+  const value = typeof measurement.value === "object"
+    ? `${measurement.value.systolic}/${measurement.value.diastolic}`
+    : String(measurement.value);
+  const label = measurementLabels[measurement.type] ?? measurement.type.replaceAll("_", " ");
+  const unit = measurement.unit ? ` ${measurement.unit}` : measurement.type === "blood_pressure" ? "" : " (unit not stated)";
+  return `${label}: ${value}${unit}`;
+}
+
 export function NoteReview({ draftId, onSaved, onBusyChange }: NoteReviewProps) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [aiExtractionAvailable, setAiExtractionAvailable] = useState(true);
@@ -109,7 +114,7 @@ export function NoteReview({ draftId, onSaved, onBusyChange }: NoteReviewProps) 
   const [loading, setLoading] = useState(true);
   const [clarifying, setClarifying] = useState(false);
   const [reload, setReload] = useState(0);
-  const [agentMode, setAgentMode] = useState<"clarification" | "confirmation" | "expression">("clarification");
+  const [agentMode, setAgentMode] = useState<"clarification" | "expression">("clarification");
   const [activeCandidateId, setActiveCandidateId] = useState<string | undefined>();
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
   const [observations, setObservations] = useState<Observation[]>([]);
@@ -189,6 +194,20 @@ export function NoteReview({ draftId, onSaved, onBusyChange }: NoteReviewProps) 
   const loadedTime = localDateTimeInput(draft.observation_time);
   const hasUnsavedChanges = JSON.stringify(measurements) !== JSON.stringify(draft.measurements) ||
     JSON.stringify(observations) !== JSON.stringify(draft.observations) || observationTime !== loadedTime;
+  const summaryItems = [
+    ...measurements.map(measurementSummary),
+    ...observations
+      .map((observation) => {
+        const description = observation.description.trim();
+        if (!description) return "";
+        const label = observationLabels[observation.type] ?? observation.type.replaceAll("_", " ");
+        return `${label}: ${description}`;
+      })
+      .filter(Boolean),
+  ];
+  const timeSummary = !hasUnsavedChanges && draft.observation_time_source
+    ? draft.observation_time_source
+    : observationTime ? new Date(observationTime).toLocaleString() : "Time not stated";
 
   function updateMeasurement(index: number, patch: Partial<Measurement>): void {
     setMeasurements((current) => current.map((measurement, currentIndex) => currentIndex === index ? { ...measurement, ...patch } : measurement));
@@ -209,20 +228,6 @@ export function NoteReview({ draftId, onSaved, onBusyChange }: NoteReviewProps) 
     const payload = await response.json().catch(() => null);
     if (!response.ok) throw new Error(responseError(payload));
     return typeof payload.status === "string" ? payload.status : "NEEDS_CLARIFICATION";
-  }
-
-  async function saveCorrections(): Promise<void> {
-    setSaving(true);
-    setNotice(null);
-    try {
-      await persistCorrections();
-      setNotice("Corrections saved as a new draft revision.");
-      setReload((value) => value + 1);
-    } catch (cause) {
-      setNotice(cause instanceof Error ? cause.message : "Could not save these corrections.");
-    } finally {
-      setSaving(false);
-    }
   }
 
   async function confirmWithButton(): Promise<void> {
@@ -247,33 +252,13 @@ export function NoteReview({ draftId, onSaved, onBusyChange }: NoteReviewProps) 
       });
       const payload = await response.json().catch(() => null);
       if (!response.ok) throw new Error(responseError(payload));
-      setDraft((current) => current ? { ...current, status: "CONFIRMED", confirmation_method: "button", confirmed_at: payload.confirmed_at, confirmed_revision: payload.confirmed_revision } : current);
+      setDraft((current) => current ? { ...current, status: "CONFIRMED", confirmed_at: payload.confirmed_at } : current);
       await saveReport();
     } catch (cause) {
       if (confirmationRequested) setReload((value) => value + 1);
       setNotice(cause instanceof Error ? cause.message : "Could not confirm this draft.");
     } finally {
       mutationRef.current = false;
-      setSaving(false);
-    }
-  }
-
-  async function startVoiceConfirmation(): Promise<void> {
-    setSaving(true);
-    setNotice(null);
-    try {
-      if (hasUnsavedChanges) {
-        const updatedStatus = await persistCorrections();
-        if (updatedStatus !== "REVIEWABLE") {
-          setReload((value) => value + 1);
-          throw new Error("Corrections saved, but unresolved details still need clarification before confirmation.");
-        }
-      }
-      setAgentMode("confirmation");
-      setClarifying(true);
-    } catch (cause) {
-      setNotice(cause instanceof Error ? cause.message : "Could not prepare this draft for confirmation.");
-    } finally {
       setSaving(false);
     }
   }
@@ -340,10 +325,7 @@ export function NoteReview({ draftId, onSaved, onBusyChange }: NoteReviewProps) 
       const response = await fetch(`/api/drafts/${encodeURIComponent(draftId)}`, { cache: "no-store" });
       const payload = await response.json().catch(() => null);
       if (!response.ok || !payload?.draft) throw new Error(responseError(payload));
-      if (agentMode === "confirmation" && ["CONFIRMED", "SAVED"].includes(payload.draft.status)) {
-        setDraft(payload.draft as Draft);
-        await saveReport();
-      }
+      setDraft(payload.draft as Draft);
     } catch (cause) {
       setNotice(cause instanceof Error ? cause.message : "Could not refresh the update. Please try again.");
     } finally {
@@ -389,14 +371,12 @@ export function NoteReview({ draftId, onSaved, onBusyChange }: NoteReviewProps) 
 
   return (
     <section className="mx-auto w-full max-w-5xl px-4 pb-10 sm:px-6 lg:px-8" aria-label="Review care update">
-      <div className="my-6 flex flex-wrap items-center justify-between gap-3">
-        <div><h2 className="text-xl font-semibold">Review your update</h2><p className="mt-1 text-sm text-muted-foreground">Check what was captured, then confirm and save.</p></div>
-        <Badge variant={needsClarification ? "outline" : confirmed ? "default" : "secondary"}>
-          {needsClarification ? "Details to clarify" : confirmed ? "Confirmed" : "Ready to review"}
-        </Badge>
-      </div>
+      {!clarifying && <div className="my-6">
+        <h2 className="text-xl font-semibold">Review this update</h2>
+        <p className="mt-1 text-sm text-muted-foreground">Check the summary. You can change any detail before saving.</p>
+      </div>}
       {clarifying && <VoiceAssistantPanel key={`${agentMode}-${activeCandidateId ?? "note"}`} draftId={draftId} mode={agentMode} candidateId={activeCandidateId} onBack={() => void finishVoice()} onReview={() => void finishVoice()} />}
-      <fieldset disabled={saving || clarifying} className="min-w-0 border-0 p-0" aria-label="Care update details">
+      {!clarifying && <fieldset disabled={saving} className="min-w-0 border-0 p-0" aria-label="Care update details">
       {!aiExtractionAvailable && (
         <Alert className="mt-4"><CircleAlert aria-hidden /><AlertTitle>Give this update an extra check</AlertTitle><AlertDescription>Some details may need correcting. Compare the summary with your original words below.</AlertDescription></Alert>
       )}
@@ -422,7 +402,7 @@ export function NoteReview({ draftId, onSaved, onBusyChange }: NoteReviewProps) 
             {!confirmed && <Button onClick={() => void openVoice("clarification")}>
               <Mic data-icon="inline-start" aria-hidden />Clarify with voice
             </Button>}
-            <p className="self-center text-xs text-muted-foreground">You can also leave these details flagged and review later.</p>
+            <p className="self-center text-xs text-muted-foreground">Clarify this before saving so the update stays accurate.</p>
           </div>
         </section>
       )}
@@ -467,7 +447,7 @@ export function NoteReview({ draftId, onSaved, onBusyChange }: NoteReviewProps) 
             <Card key={suggestion.suggestion_id} className="border-primary/30">
               <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-sm"><Sparkles className="size-4" aria-hidden />Remember this meaning?</CardTitle>
-                <CardDescription>You said “{suggestion.phrase}” means {measurementLabels[suggestion.measurement_type] ?? suggestion.measurement_type} for {suggestion.patient_name}. Should VoiceCare remember that? This won't change the current draft.</CardDescription>
+                <CardDescription>You said “{suggestion.phrase}” means {measurementLabels[suggestion.measurement_type] ?? suggestion.measurement_type} for {suggestion.patient_name}. Should VoiceCare remember that? This won&apos;t change the current draft.</CardDescription>
               </CardHeader>
               <CardContent className="flex gap-2">
                 <Button onClick={() => void rememberExpression(suggestion)} disabled={savingSuggestion !== null}>
@@ -480,6 +460,20 @@ export function NoteReview({ draftId, onSaved, onBusyChange }: NoteReviewProps) 
         </section>
       )}
 
+      <Card className="mt-5">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">Here’s what I captured</CardTitle>
+          <CardDescription>{draft.patient_name} · {timeSummary}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm leading-relaxed">
+            {summaryItems.length ? summaryItems.join(" · ") : draft.original_transcript || "No details were extracted. Check the original words before saving."}
+          </p>
+        </CardContent>
+      </Card>
+
+      <details className="mt-4">
+        <summary className="cursor-pointer text-sm font-medium">Edit details</summary>
       <div className="mt-5 grid gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(20rem,0.75fr)] lg:items-start">
       <div className="flex min-w-0 flex-col gap-6">
       <section aria-labelledby="measurements-heading">
@@ -506,8 +500,6 @@ export function NoteReview({ draftId, onSaved, onBusyChange }: NoteReviewProps) 
                   <label className="mt-2 block text-xs text-muted-foreground">Unit
                     <Input aria-label={`${measurementLabels[measurement.type] ?? measurement.type} unit`} value={measurement.unit ?? ""} placeholder="Enter unit" disabled={!editable} onChange={(event) => updateMeasurement(index, { unit: event.target.value.trim() || null })} />
                   </label>
-                  <p className="mt-2 text-xs text-muted-foreground">Extracted from: “{measurement.source_text}”</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Extraction confidence: {Math.round(measurement.confidence * 100)}%</p>
                 </CardContent>
               </Card>
             ))}
@@ -529,7 +521,6 @@ export function NoteReview({ draftId, onSaved, onBusyChange }: NoteReviewProps) 
                   <CardTitle className="text-sm">{observationLabels[observation.type] ?? observation.type}</CardTitle>
                   <CardDescription>
                     <Input aria-label={`${observationLabels[observation.type] ?? observation.type} description`} value={observation.description} disabled={!editable} onChange={(event) => setObservations((current) => current.map((item, currentIndex) => currentIndex === index ? { ...item, description: event.target.value, source_text: event.target.value } : item))} />
-                    <span className="mt-1 block text-xs text-muted-foreground">From this update: “{observation.source_text}”</span>
                   </CardDescription>
                 </CardHeader>
               </Card>
@@ -562,49 +553,55 @@ export function NoteReview({ draftId, onSaved, onBusyChange }: NoteReviewProps) 
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="flex items-center gap-2 text-sm">
-            <ClipboardCheck className="size-4 text-muted-foreground" aria-hidden />
-            Original transcript
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="whitespace-pre-wrap text-sm leading-relaxed">{draft.original_transcript}</CardContent>
-      </Card>
       </div>
       </div>
-
-
+      <details className="mt-4 rounded-lg border px-4 py-3">
+        <summary className="cursor-pointer text-sm font-medium">See the original words</summary>
+        <Card className="mt-3">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <ClipboardCheck className="size-4 text-muted-foreground" aria-hidden />
+              Original transcript
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="whitespace-pre-wrap text-sm leading-relaxed">{draft.original_transcript}</CardContent>
+        </Card>
+        <div className="mt-3 space-y-2">
+          {measurements.map((measurement, index) => (
+            <p key={`measurement-source-${measurement.type}-${index}`} className="text-xs text-muted-foreground">
+              {measurementLabels[measurement.type] ?? measurement.type}: “{measurement.source_text}” · {Math.round(measurement.confidence * 100)}% extraction confidence
+            </p>
+          ))}
+          {observations.map((observation, index) => (
+            <p key={`observation-source-${observation.type}-${index}`} className="text-xs text-muted-foreground">
+              {observationLabels[observation.type] ?? observation.type}: “{observation.source_text}” · {Math.round(observation.confidence * 100)}% extraction confidence
+            </p>
+          ))}
+        </div>
+      </details>
+      </details>
       {!confirmed ? (
         <div className="care-action-bar mt-5 flex flex-col gap-2 sm:flex-row">
-          <Button variant="outline" onClick={() => void saveCorrections()} disabled={saving || !hasUnsavedChanges}>
-            {saving ? <LoaderCircle className="animate-spin" data-icon="inline-start" aria-hidden /> : <Save data-icon="inline-start" aria-hidden />}
-            Save corrections
-          </Button>
           <Button onClick={() => void confirmWithButton()} disabled={saving || needsClarification || draft.unresolved_issues.length > 0}>
-            <Check data-icon="inline-start" aria-hidden />Confirm &amp; save
-          </Button>
-          <Button variant="outline" onClick={() => void startVoiceConfirmation()} disabled={saving || needsClarification || draft.unresolved_issues.length > 0}>
-            <Mic data-icon="inline-start" aria-hidden />Confirm &amp; save by voice
+            {saving ? <LoaderCircle className="animate-spin" data-icon="inline-start" aria-hidden /> : <Check data-icon="inline-start" aria-hidden />}
+            Save update
           </Button>
         </div>
       ) : (
         <Card className="mt-5"><CardContent className="py-4 text-sm">
-        Confirmed by {draft.confirmation_method === "voice" ? "voice" : "button"}
-          {draft.confirmed_at ? ` on ${new Date(draft.confirmed_at).toLocaleString()}` : ""}
-          {draft.confirmed_revision ? ` (revision ${draft.confirmed_revision})` : ""}.
+          {draft.confirmed_at ? `Update confirmed on ${new Date(draft.confirmed_at).toLocaleString()}.` : "Update confirmed."}
         </CardContent></Card>
       )}
 
       {confirmed && <Button className="mt-3" onClick={() => void saveReport()} disabled={saving}>
         {saving ? <LoaderCircle className="animate-spin" data-icon="inline-start" aria-hidden /> : <Save data-icon="inline-start" aria-hidden />}
-        Retry saving report
+        Retry save
       </Button>}
 
       <p className="mt-5 text-center text-xs text-muted-foreground">
         This is an automatically organized draft, not a diagnosis or medical advice.
       </p>
-      </fieldset>
+      </fieldset>}
       {notice && <p role="status" className="mt-4 text-center text-sm text-muted-foreground">{notice}</p>}
     </section>
   );

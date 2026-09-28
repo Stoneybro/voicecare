@@ -77,6 +77,9 @@ export function VoiceAssistantPanel({ draftId, mode = "clarification", candidate
   const pendingToolRef = useRef<ToolCall | null>(null);
   const confirmationReplyRef = useRef(false);
   const expressionReplyRef = useRef(false);
+  const autoStartRequestedRef = useRef(false);
+  const clarificationCompleteReplyRef = useRef(false);
+  const autoReviewTimerRef = useRef<number | null>(null);
 
   const cleanup = useCallback((endSession: boolean) => {
     readyRef.current = false;
@@ -94,11 +97,15 @@ export function VoiceAssistantPanel({ draftId, mode = "clarification", candidate
     contextRef.current = null;
   }, []);
 
-  useEffect(() => () => cleanup(true), [cleanup]);
+  useEffect(() => () => {
+    if (autoReviewTimerRef.current !== null) window.clearTimeout(autoReviewTimerRef.current);
+    cleanup(true);
+  }, [cleanup]);
 
   const start = useCallback(async () => {
     setBusy(true);
     setError(null);
+    setStatus("Preparing your microphone and connecting...");
     try {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("Microphone access needs a secure browser connection.");
       const tokenUrl = new URL("/api/agent-token", window.location.origin);
@@ -189,7 +196,9 @@ export function VoiceAssistantPanel({ draftId, mode = "clarification", candidate
               if (mode === "expression" && result?.expression_suggestion) setSuggestion(result.expression_suggestion as Suggestion);
               if (mode === "clarification" && result?.expression_suggestion) setSuggestion(result.expression_suggestion as Suggestion);
               const nextIssueId = mode === "clarification" && typeof result.next_issue_id === "string" ? result.next_issue_id : null;
+              const allBlockingDetailsClear = mode === "clarification" && result.issue_resolved === true && !nextIssueId;
               if (nextIssueId) issueIdRef.current = nextIssueId;
+              if (allBlockingDetailsClear) clarificationCompleteReplyRef.current = true;
               socket.send(JSON.stringify({
                 type: "tool.result",
                 call_id: tool.call_id,
@@ -205,7 +214,9 @@ export function VoiceAssistantPanel({ draftId, mode = "clarification", candidate
                         : "Thank the caregiver. Tell them they can choose the meaning from the list on the review screen. Do not suggest a meaning."
                     : nextIssueId
                       ? "If the current detail is resolved, ask the next question exactly as provided. If it remains unresolved, ask the same question again more simply."
-                      : "All blocking details are resolved. Tell the caregiver they can review the update now, then do not ask anything else.",
+                      : result.issue_resolved === true
+                        ? "All blocking details are resolved. Tell the caregiver they can review the update now, then do not ask anything else."
+                        : "That answer did not resolve the detail. Ask the same question again more simply. Do not say the update is ready to review.",
                 }),
                 is_error: false,
               }));
@@ -216,7 +227,11 @@ export function VoiceAssistantPanel({ draftId, mode = "clarification", candidate
                 expressionReplyRef.current = true;
                 setStatus(result.resolved ? "Explanation received. Review the suggested mapping before saving." : "You can choose the meaning from the list on the review screen.");
               } else {
-                setStatus(nextIssueId ? "Answer saved. Continuing with the next detail." : "All blocking details are clear. You can review the update.");
+                setStatus(nextIssueId
+                  ? "Answer saved. Continuing with the next detail."
+                  : result.issue_resolved === true
+                    ? "All blocking details are clear. Returning to your review..."
+                    : "That detail still needs clarification. Try answering in a different way.");
               }
               setState("listening");
               readyRef.current = true;
@@ -236,6 +251,16 @@ export function VoiceAssistantPanel({ draftId, mode = "clarification", candidate
           expressionReplyRef.current = false;
           cleanup(true);
           onReview();
+        } else if (message.type === "reply.done" && clarificationCompleteReplyRef.current && !pendingToolRef.current) {
+          clarificationCompleteReplyRef.current = false;
+          const remainingAudioMs = contextRef.current
+            ? Math.max(0, playbackTimeRef.current - contextRef.current.currentTime) * 1000
+            : 0;
+          autoReviewTimerRef.current = window.setTimeout(() => {
+            autoReviewTimerRef.current = null;
+            cleanup(true);
+            onReview();
+          }, remainingAudioMs + 150);
         } else if (message.type === "session.error" || message.type === "error") {
           readyRef.current = false;
           setError(typeof message.message === "string" ? message.message : "The voice session encountered an error.");
@@ -263,7 +288,15 @@ export function VoiceAssistantPanel({ draftId, mode = "clarification", candidate
     }
   }, [candidateId, cleanup, draftId, mode, onReview]);
 
+  useEffect(() => {
+    if (autoStartRequestedRef.current) return;
+    autoStartRequestedRef.current = true;
+    void start();
+  }, [start]);
+
   function finish(): void {
+    if (autoReviewTimerRef.current !== null) window.clearTimeout(autoReviewTimerRef.current);
+    autoReviewTimerRef.current = null;
     cleanup(true);
     onReview();
   }

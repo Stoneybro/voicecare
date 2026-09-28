@@ -236,6 +236,7 @@ export default function HomeScreen() {
       <CareNoteWorkspace
         patientId={recordingPatient.id}
         patientName={recordingPatient.display_name}
+        startOnMount
         onCancel={() => setRecordingPatientId(null)}
         onSaved={(reportId) => {
           setRecordingPatientId(null);
@@ -327,7 +328,7 @@ export default function HomeScreen() {
           <Button size="lg" className="mt-6 max-w-full h-auto min-h-12 whitespace-normal" onClick={() => selectedPatient && setRecordingPatientId(selectedPatient.id)} disabled={!selectedPatient}>
             <Mic data-icon="inline-start" aria-hidden />Start a voice update
           </Button>
-          <div className="care-capture-foot"><span className="care-small-dot" />Speak freely. VoiceCare keeps up in real time.</div>
+          <div className="care-capture-foot">Speak freely. VoiceCare keeps up in real time.</div>
         </section>
 
         <section className="care-journal" aria-labelledby="history-heading">

@@ -7,6 +7,9 @@ import { ArrowLeft, Download, FileText, LoaderCircle, Printer } from "lucide-rea
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+
+type ExportFormat = "doctor" | "family" | "json" | "csv" | "print";
 
 type ReportSummary = {
   id: string;
@@ -31,8 +34,6 @@ type Observation = { type: string; description: string; confidence: number; sour
 
 type Report = ReportSummary & {
   draft_id: string;
-  confirmed_revision: number;
-  confirmation_method: "button" | "voice";
   confirmed_at: string;
   observation_time_precision: string;
   observation_time_source: string | null;
@@ -195,6 +196,7 @@ export function ReportDetailPanel({ reportId, onBack }: { reportId: string; onBa
   const [report, setReport] = useState<Report | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [previewFormat, setPreviewFormat] = useState<ExportFormat | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -224,22 +226,92 @@ export function ReportDetailPanel({ reportId, onBack }: { reportId: string; onBa
     measurements: report.measurements,
     observations: report.observations,
   };
+  const previewTitle = previewFormat === "doctor" ? "Doctor summary"
+    : previewFormat === "family" ? "Family summary"
+      : previewFormat === "json" ? "JSON file"
+        : previewFormat === "csv" ? "CSV spreadsheet"
+          : "Print preview";
+  const previewText = previewFormat === "doctor" ? doctorText(report)
+    : previewFormat === "family" ? familyText(report)
+      : previewFormat === "json" ? `${JSON.stringify(JSON.parse(stableJson(jsonData)), null, 2)}\n`
+        : previewFormat === "csv" ? `${csvFor(report)}\r\n`
+          : "";
+
+  function exportPreview(): void {
+    if (!previewFormat) return;
+    const currentReport = report;
+    if (!currentReport) return;
+    if (previewFormat === "print") {
+      setPreviewFormat(null);
+      window.setTimeout(() => window.print(), 100);
+    } else if (previewFormat === "doctor") {
+      downloadFile(`voicecare-${currentReport.id}-doctor.txt`, previewText, "text/plain;charset=utf-8");
+      setPreviewFormat(null);
+    } else if (previewFormat === "family") {
+      downloadFile(`voicecare-${currentReport.id}-family.txt`, previewText, "text/plain;charset=utf-8");
+      setPreviewFormat(null);
+    } else if (previewFormat === "json") {
+      downloadFile(`voicecare-${currentReport.id}.json`, previewText, "application/json;charset=utf-8");
+      setPreviewFormat(null);
+    } else {
+      downloadFile(`voicecare-${currentReport.id}.csv`, previewText, "text/csv;charset=utf-8");
+      setPreviewFormat(null);
+    }
+  }
   return (
     <section className="care-report w-full pb-4">
       <header className="flex flex-wrap items-center justify-between gap-2 print:hidden">
 
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="outline" onClick={() => downloadFile(`voicecare-${report.id}-doctor.txt`, doctorText(report), "text/plain;charset=utf-8")}><Download data-icon="inline-start" aria-hidden />Doctor summary</Button>
-          <Button size="sm" variant="outline" onClick={() => downloadFile(`voicecare-${report.id}-family.txt`, familyText(report), "text/plain;charset=utf-8")}><Download data-icon="inline-start" aria-hidden />Family summary</Button>
-          <Button size="sm" variant="outline" onClick={() => downloadFile(`voicecare-${report.id}.json`, `${JSON.stringify(JSON.parse(stableJson(jsonData)), null, 2)}\n`, "application/json;charset=utf-8")}><Download data-icon="inline-start" aria-hidden />JSON</Button>
-          <Button size="sm" variant="outline" onClick={() => downloadFile(`voicecare-${report.id}.csv`, `${csvFor(report)}\r\n`, "text/csv;charset=utf-8")}><Download data-icon="inline-start" aria-hidden />CSV</Button>
-          <Button size="sm" onClick={() => window.print()}><Printer data-icon="inline-start" aria-hidden />Print</Button>
+          <Button size="sm" variant="outline" onClick={() => setPreviewFormat("doctor")}><FileText data-icon="inline-start" aria-hidden />Doctor summary</Button>
+          <Button size="sm" variant="outline" onClick={() => setPreviewFormat("family")}><FileText data-icon="inline-start" aria-hidden />Family summary</Button>
+          <Button size="sm" variant="outline" onClick={() => setPreviewFormat("json")}><FileText data-icon="inline-start" aria-hidden />JSON</Button>
+          <Button size="sm" variant="outline" onClick={() => setPreviewFormat("csv")}><FileText data-icon="inline-start" aria-hidden />CSV</Button>
+          <Button size="sm" onClick={() => setPreviewFormat("print")}><Printer data-icon="inline-start" aria-hidden />Print</Button>
         </div>
       </header>
 
+      <Dialog open={previewFormat !== null} onOpenChange={(open) => { if (!open) setPreviewFormat(null); }}>
+        <DialogContent className="sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>{previewFormat === "print" ? "Print preview" : `Preview ${previewTitle.toLowerCase()}`}</DialogTitle>
+            <DialogDescription>{previewFormat === "print" ? "This is the page that will be sent to print." : "Check this file before downloading it."}</DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[60vh] overflow-auto rounded-lg border bg-background p-4">
+            {previewFormat === "print" ? (
+              <div className="space-y-5">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">VoiceCare · Confirmed update</p>
+                  <h2 className="mt-2 text-xl font-semibold">Care update for {report.patient_name}</h2>
+                  <p className="mt-1 text-sm text-muted-foreground">Observed {report.observation_time ? new Date(report.observation_time).toLocaleString() : "time not recorded"}</p>
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold">Measurements</h3>
+                  {report.measurements.length ? <div className="mt-2 divide-y rounded-md border">{report.measurements.map((measurement, index) => <div key={`${measurement.type}-${index}`} className="px-3 py-2 text-sm"><div className="flex justify-between gap-3"><span>{typeLabel(measurement.type)}</span><span className="font-medium">{valueText(measurement)}{measurement.unit ? ` ${measurement.unit}` : ""}</span></div><p className="mt-1 text-xs text-muted-foreground">Source: {measurement.source_text}</p></div>)}</div> : <p className="mt-2 text-sm text-muted-foreground">No measurements recorded.</p>}
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold">Observations</h3>
+                  {report.observations.length ? <div className="mt-2 space-y-2">{report.observations.map((observation, index) => <div key={`${observation.type}-${index}`} className="rounded-md border px-3 py-2"><p className="text-sm">{observation.description}</p><p className="mt-1 text-xs text-muted-foreground">{observation.type}</p></div>)}</div> : <p className="mt-2 text-sm text-muted-foreground">No observations recorded.</p>}
+                </div>
+                <p className="border-t pt-3 text-xs text-muted-foreground">Confirmed {new Date(report.confirmed_at).toLocaleString()} · saved {new Date(report.saved_at).toLocaleString()}. This caregiver-recorded report is not a diagnosis.</p>
+              </div>
+            ) : (
+              <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">{previewText}</pre>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPreviewFormat(null)}>Close</Button>
+            <Button onClick={exportPreview}>
+              {previewFormat === "print" ? <Printer data-icon="inline-start" aria-hidden /> : <Download data-icon="inline-start" aria-hidden />}
+              {previewFormat === "print" ? "Print update" : "Download file"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <article id="print-summary" className="mt-5 flex flex-col gap-5">
         <section>
-          <Badge variant="secondary">Confirmed update · revision {report.confirmed_revision}</Badge>
+          <Badge variant="secondary">Confirmed update</Badge>
           <h1 className="mt-3 text-2xl font-semibold">Care update for {report.patient_name}</h1>
           <p className="mt-1 text-sm text-muted-foreground">Observed {report.observation_time ? new Date(report.observation_time).toLocaleString() : "time not recorded"}</p>
         </section>
