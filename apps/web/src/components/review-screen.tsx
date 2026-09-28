@@ -3,11 +3,11 @@
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, CalendarClock, CircleAlert, Check, ClipboardCheck, HeartPulse, LoaderCircle, Mic, Save, Sparkles } from "lucide-react";
+import { CalendarClock, CircleAlert, Check, ClipboardCheck, LoaderCircle, Mic, Save, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ClarificationScreen } from "@/components/clarification-screen";
+import { VoiceAssistantPanel } from "@/components/clarification-screen";
 import { Input } from "@/components/ui/input";
 
 type Measurement = {
@@ -55,7 +55,7 @@ type Draft = {
   id: string;
   patient_name: string;
   revision: number;
-  status: "NEEDS_CLARIFICATION" | "REVIEWABLE" | "CONFIRMED";
+  status: "NEEDS_CLARIFICATION" | "REVIEWABLE" | "CONFIRMED" | "SAVED";
   original_transcript: string;
   measurements: Measurement[];
   observations: Observation[];
@@ -68,7 +68,7 @@ type Draft = {
   confirmed_revision: number | null;
 };
 
-type ReviewScreenProps = { draftId: string; onBack: () => void; onSaved: (reportId: string) => void };
+type NoteReviewProps = { draftId: string; onSaved: (reportId: string) => void; onBusyChange: (busy: boolean) => void };
 
 const measurementLabels: Record<string, string> = {
   blood_pressure: "Blood pressure",
@@ -84,7 +84,7 @@ const observationLabels: Record<string, string> = {
   food: "Food and drink",
   mood: "Mood",
   sleep: "Sleep",
-  free_text: "Note",
+  free_text: "Observation",
 };
 
 function responseError(payload: unknown): string {
@@ -102,7 +102,7 @@ function localDateTimeInput(value: string | null): string {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 }
 
-export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
+export function NoteReview({ draftId, onSaved, onBusyChange }: NoteReviewProps) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [aiExtractionAvailable, setAiExtractionAvailable] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -120,12 +120,16 @@ export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
   const [observationTime, setObservationTime] = useState("");
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const mutationRef = useRef(false);
   const idempotencyKeyRef = useRef<string | null>(null);
+
+  useEffect(() => { onBusyChange(saving || clarifying); return () => onBusyChange(false); }, [saving, clarifying, onBusyChange]);
 
   useEffect(() => {
     let active = true;
     async function loadDraft() {
       try {
+        setError(null);
         const response = await fetch(`/api/drafts/${encodeURIComponent(draftId)}`, { cache: "no-store" });
         const payload = await response.json().catch(() => null);
         if (!response.ok) throw new Error(responseError(payload));
@@ -159,41 +163,29 @@ export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
     return () => { active = false; };
   }, [draftId, reload]);
 
-  if (clarifying) {
-    return (
-      <ClarificationScreen
-        draftId={draftId}
-        mode={agentMode}
-        candidateId={activeCandidateId}
-        onBack={() => { setClarifying(false); setReload((value) => value + 1); }}
-        onReview={() => { setClarifying(false); setReload((value) => value + 1); }}
-      />
-    );
-  }
-
   if (loading) {
     return (
-      <main className="mx-auto flex min-h-dvh w-full max-w-2xl flex-col items-center justify-center gap-3 p-6 text-center">
+      <section className="mx-auto flex min-h-48 w-full max-w-2xl flex-col items-center justify-center gap-3 p-6 text-center">
         <LoaderCircle className="size-6 animate-spin text-primary" aria-hidden />
         <p className="text-sm text-muted-foreground">Preparing your draft review...</p>
-      </main>
+      </section>
     );
   }
 
   if (error || !draft) {
     return (
-      <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-4 p-6 text-center">
+      <section className="mx-auto flex min-h-48 w-full max-w-md flex-col items-center justify-center gap-4 p-6 text-center">
         <CircleAlert className="size-8 text-destructive" aria-hidden />
         <h1 className="text-lg font-semibold">Draft unavailable</h1>
         <p className="text-sm text-muted-foreground">{error ?? "Could not load this draft."}</p>
-        <Button variant="outline" onClick={onBack}><ArrowLeft data-icon="inline-start" aria-hidden />Back to workspace</Button>
-      </main>
+        <Button variant="outline" onClick={() => setReload((value) => value + 1)}>Try again</Button>
+      </section>
     );
   }
 
   const needsClarification = draft.status === "NEEDS_CLARIFICATION";
-  const confirmed = draft.status === "CONFIRMED";
-  const editable = !confirmed;
+  const confirmed = draft.status === "CONFIRMED" || draft.status === "SAVED";
+  const editable = !confirmed && !saving && !clarifying;
   const loadedTime = localDateTimeInput(draft.observation_time);
   const hasUnsavedChanges = JSON.stringify(measurements) !== JSON.stringify(draft.measurements) ||
     JSON.stringify(observations) !== JSON.stringify(draft.observations) || observationTime !== loadedTime;
@@ -234,6 +226,9 @@ export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
   }
 
   async function confirmWithButton(): Promise<void> {
+    if (mutationRef.current) return;
+    mutationRef.current = true;
+    let confirmationRequested = false;
     setSaving(true);
     setNotice(null);
     try {
@@ -244,6 +239,7 @@ export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
           throw new Error("Corrections saved, but unresolved details still need clarification before confirmation.");
         }
       }
+      confirmationRequested = true;
       const response = await fetch(`/api/drafts/${encodeURIComponent(draftId)}/confirm`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -251,11 +247,13 @@ export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
       });
       const payload = await response.json().catch(() => null);
       if (!response.ok) throw new Error(responseError(payload));
-      setNotice("Draft confirmed.");
-      setReload((value) => value + 1);
+      setDraft((current) => current ? { ...current, status: "CONFIRMED", confirmation_method: "button", confirmed_at: payload.confirmed_at, confirmed_revision: payload.confirmed_revision } : current);
+      await saveReport();
     } catch (cause) {
+      if (confirmationRequested) setReload((value) => value + 1);
       setNotice(cause instanceof Error ? cause.message : "Could not confirm this draft.");
     } finally {
+      mutationRef.current = false;
       setSaving(false);
     }
   }
@@ -314,7 +312,7 @@ export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
       const payload = await response.json().catch(() => null);
       if (!response.ok) throw new Error(responseError(payload));
       setExpressionSuggestions((current) => current.filter((entry) => entry.suggestion_id !== suggestion.suggestion_id));
-      setNotice(`I’ll remember “${suggestion.phrase}” for ${suggestion.patient_name}.`);
+      setNotice(`I'll remember “${suggestion.phrase}” for ${suggestion.patient_name}.`);
     } catch (cause) {
       setNotice(cause instanceof Error ? cause.message : "That phrase could not be remembered.");
     } finally {
@@ -322,10 +320,36 @@ export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
     }
   }
 
-  function explainExpression(candidate: ExpressionCandidate): void {
-    setActiveCandidateId(candidate.candidate_id);
-    setAgentMode("expression");
-    setClarifying(true);
+  async function openVoice(mode: "clarification" | "expression", candidateId?: string): Promise<void> {
+    setSaving(true);
+    setNotice(null);
+    try {
+      if (hasUnsavedChanges) await persistCorrections();
+      setActiveCandidateId(candidateId);
+      setAgentMode(mode);
+      setClarifying(true);
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : "Could not prepare voice assistance.");
+    } finally { setSaving(false); }
+  }
+
+  async function finishVoice(): Promise<void> {
+    setClarifying(false);
+    setSaving(true);
+    try {
+      const response = await fetch(`/api/drafts/${encodeURIComponent(draftId)}`, { cache: "no-store" });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.draft) throw new Error(responseError(payload));
+      if (agentMode === "confirmation" && ["CONFIRMED", "SAVED"].includes(payload.draft.status)) {
+        setDraft(payload.draft as Draft);
+        await saveReport();
+      }
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : "Could not refresh the update. Please try again.");
+    } finally {
+      setReload((value) => value + 1);
+      setSaving(false);
+    }
   }
 
   async function resolveExpression(candidate: ExpressionCandidate, answer: string): Promise<void> {
@@ -364,34 +388,17 @@ export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
   }
 
   return (
-    <main className="care-screen mx-auto flex min-h-dvh w-full max-w-6xl flex-col px-4 pb-10 pt-5 sm:px-6 lg:px-8 xl:px-10">
-      <header className="flex items-center justify-between">
-        <Button variant="ghost" onClick={onBack}>
-          <ArrowLeft data-icon="inline-start" aria-hidden />
-          Care journal
-        </Button>
+    <section className="mx-auto w-full max-w-5xl px-4 pb-10 sm:px-6 lg:px-8" aria-label="Review care update">
+      <div className="my-6 flex flex-wrap items-center justify-between gap-3">
+        <div><h2 className="text-xl font-semibold">Review your update</h2><p className="mt-1 text-sm text-muted-foreground">Check what was captured, then confirm and save.</p></div>
         <Badge variant={needsClarification ? "outline" : confirmed ? "default" : "secondary"}>
-          {needsClarification ? "Needs clarification" : confirmed ? "Confirmed" : "Ready to review"}
+          {needsClarification ? "Details to clarify" : confirmed ? "Confirmed" : "Ready to review"}
         </Badge>
-      </header>
-
-      <section className="mt-5">
-        <div className="flex items-center gap-3">
-          <span className="flex size-10 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-            <HeartPulse className="size-5" aria-hidden />
-          </span>
-          <div>
-            <p className="text-xs text-muted-foreground">Draft for {draft.patient_name}</p>
-            <h1 className="text-2xl font-semibold tracking-tight">Let’s get the details right</h1>
-          </div>
-        </div>
-        <p className="mt-3 text-sm text-muted-foreground">
-          Here is your update, organized. Check the details and make any changes before you confirm.
-        </p>
-      </section>
-
+      </div>
+      {clarifying && <VoiceAssistantPanel key={`${agentMode}-${activeCandidateId ?? "note"}`} draftId={draftId} mode={agentMode} candidateId={activeCandidateId} onBack={() => void finishVoice()} onReview={() => void finishVoice()} />}
+      <fieldset disabled={saving || clarifying} className="min-w-0 border-0 p-0" aria-label="Care update details">
       {!aiExtractionAvailable && (
-        <Alert className="mt-4"><CircleAlert aria-hidden /><AlertTitle>Give your note an extra check</AlertTitle><AlertDescription>Some details may need correcting. Compare the summary with your original words below.</AlertDescription></Alert>
+        <Alert className="mt-4"><CircleAlert aria-hidden /><AlertTitle>Give this update an extra check</AlertTitle><AlertDescription>Some details may need correcting. Compare the summary with your original words below.</AlertDescription></Alert>
       )}
 
       {needsClarification && (
@@ -412,7 +419,7 @@ export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
             </ul>
           </div>
           <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-            {!confirmed && <Button onClick={() => { setAgentMode("clarification"); setClarifying(true); }}>
+            {!confirmed && <Button onClick={() => void openVoice("clarification")}>
               <Mic data-icon="inline-start" aria-hidden />Clarify with voice
             </Button>}
             <p className="self-center text-xs text-muted-foreground">You can also leave these details flagged and review later.</p>
@@ -426,10 +433,10 @@ export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
             <Card key={candidate.candidate_id} className="border-primary/30">
               <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-sm"><Sparkles className="size-4" aria-hidden />What does “{candidate.phrase}” mean?</CardTitle>
-                <CardDescription>From your note: “{candidate.source_text}”. VoiceCare has not guessed what “{candidate.phrase}” means. You can explain it or choose a meaning below.</CardDescription>
+                <CardDescription>From this update: “{candidate.source_text}”. VoiceCare has not guessed what “{candidate.phrase}” means. You can explain it or choose a meaning below.</CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-end">
-                <Button variant="outline" onClick={() => explainExpression(candidate)} disabled={savingSuggestion !== null}>
+                <Button variant="outline" onClick={() => void openVoice("expression", candidate.candidate_id)} disabled={savingSuggestion !== null}>
                   <Mic data-icon="inline-start" aria-hidden />Explain by voice
                 </Button>
                 <label className="flex-1 text-xs text-muted-foreground">Or choose what it means
@@ -460,7 +467,7 @@ export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
             <Card key={suggestion.suggestion_id} className="border-primary/30">
               <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-sm"><Sparkles className="size-4" aria-hidden />Remember this meaning?</CardTitle>
-                <CardDescription>You said “{suggestion.phrase}” means {measurementLabels[suggestion.measurement_type] ?? suggestion.measurement_type} for {suggestion.patient_name}. Should VoiceCare remember that? This won’t change the current draft.</CardDescription>
+                <CardDescription>You said “{suggestion.phrase}” means {measurementLabels[suggestion.measurement_type] ?? suggestion.measurement_type} for {suggestion.patient_name}. Should VoiceCare remember that? This won't change the current draft.</CardDescription>
               </CardHeader>
               <CardContent className="flex gap-2">
                 <Button onClick={() => void rememberExpression(suggestion)} disabled={savingSuggestion !== null}>
@@ -522,7 +529,7 @@ export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
                   <CardTitle className="text-sm">{observationLabels[observation.type] ?? observation.type}</CardTitle>
                   <CardDescription>
                     <Input aria-label={`${observationLabels[observation.type] ?? observation.type} description`} value={observation.description} disabled={!editable} onChange={(event) => setObservations((current) => current.map((item, currentIndex) => currentIndex === index ? { ...item, description: event.target.value, source_text: event.target.value } : item))} />
-                    <span className="mt-1 block text-xs text-muted-foreground">From your note: “{observation.source_text}”</span>
+                    <span className="mt-1 block text-xs text-muted-foreground">From this update: “{observation.source_text}”</span>
                   </CardDescription>
                 </CardHeader>
               </Card>
@@ -567,7 +574,7 @@ export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
       </div>
       </div>
 
-      {notice && <p role="status" className="mt-4 text-center text-sm text-muted-foreground">{notice}</p>}
+
       {!confirmed ? (
         <div className="care-action-bar mt-5 flex flex-col gap-2 sm:flex-row">
           <Button variant="outline" onClick={() => void saveCorrections()} disabled={saving || !hasUnsavedChanges}>
@@ -575,10 +582,10 @@ export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
             Save corrections
           </Button>
           <Button onClick={() => void confirmWithButton()} disabled={saving || needsClarification || draft.unresolved_issues.length > 0}>
-            <Check data-icon="inline-start" aria-hidden />Confirm draft
+            <Check data-icon="inline-start" aria-hidden />Confirm &amp; save
           </Button>
           <Button variant="outline" onClick={() => void startVoiceConfirmation()} disabled={saving || needsClarification || draft.unresolved_issues.length > 0}>
-            <Mic data-icon="inline-start" aria-hidden />Confirm by voice
+            <Mic data-icon="inline-start" aria-hidden />Confirm &amp; save by voice
           </Button>
         </div>
       ) : (
@@ -591,12 +598,14 @@ export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
 
       {confirmed && <Button className="mt-3" onClick={() => void saveReport()} disabled={saving}>
         {saving ? <LoaderCircle className="animate-spin" data-icon="inline-start" aria-hidden /> : <Save data-icon="inline-start" aria-hidden />}
-        Save report
+        Retry saving report
       </Button>}
 
       <p className="mt-5 text-center text-xs text-muted-foreground">
         This is an automatically organized draft, not a diagnosis or medical advice.
       </p>
-    </main>
+      </fieldset>
+      {notice && <p role="status" className="mt-4 text-center text-sm text-muted-foreground">{notice}</p>}
+    </section>
   );
 }

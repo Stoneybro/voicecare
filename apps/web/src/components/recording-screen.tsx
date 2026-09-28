@@ -3,16 +3,17 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { ArrowLeft, Check, LoaderCircle, Mic, MicOff, Radio, RotateCcw, Type } from "lucide-react";
 import { toast } from "sonner";
+import { NoteReview } from "@/components/review-screen";
 import { Orb } from "@/components/ui/orb";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 
-type RecordingScreenProps = {
+type CareNoteWorkspaceProps = {
   patientId: string;
   patientName: string;
   onCancel: () => void;
-  onSaved: (draftId: string) => void;
+  onSaved: (reportId: string) => void;
 };
 
 type ScreenMode = "ready" | "connecting" | "live" | "fallback" | "saving";
@@ -58,11 +59,12 @@ function resampleToPcm16(input: Float32Array, inputRate: number, outputRate: num
   return pcm.buffer;
 }
 
-export function RecordingScreen({ patientId, patientName, onCancel, onSaved }: RecordingScreenProps) {
+export function CareNoteWorkspace({ patientId, patientName, onCancel, onSaved }: CareNoteWorkspaceProps) {
+  const [reviewDraftId, setReviewDraftId] = useState<string | null>(null);
+  const [reviewBusy, setReviewBusy] = useState(false);
   const [mode, setMode] = useState<ScreenMode>("ready");
   const [transcript, setTranscript] = useState("");
   const [typedTranscript, setTypedTranscript] = useState("");
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [statusMessage, setStatusMessage] = useState("");
   const draftIdRef = useRef<string | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
@@ -74,7 +76,6 @@ export function RecordingScreen({ patientId, patientName, onCancel, onSaved }: R
   const disposedRef = useRef(false);
   const savingRef = useRef(false);
   const transcriptRef = useRef("");
-  const startTimeRef = useRef<number | null>(null);
 
   const updateTranscript = useCallback(() => {
     const finalized = [...finalTurnsRef.current.entries()]
@@ -112,7 +113,6 @@ export function RecordingScreen({ patientId, patientName, onCancel, onSaved }: R
     async (message: string) => {
       const socket = socketRef.current;
       await stopAudio();
-      startTimeRef.current = null;
       if (socket && socket.readyState < WebSocket.OPEN) socket.close();
       setStatusMessage(message);
       setTypedTranscript(transcriptRef.current);
@@ -120,15 +120,6 @@ export function RecordingScreen({ patientId, patientName, onCancel, onSaved }: R
     },
     [stopAudio],
   );
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      if (startTimeRef.current !== null) {
-        setElapsedSeconds(Math.floor((Date.now() - startTimeRef.current) / 1000));
-      }
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, []);
 
   useEffect(() => {
     return () => {
@@ -148,7 +139,7 @@ export function RecordingScreen({ patientId, patientName, onCancel, onSaved }: R
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok || !payload || typeof payload.draft_id !== "string") {
-      throw new Error(errorMessage(payload, "Could not start this note. Please try again."));
+      throw new Error(errorMessage(payload, "Could not start this update. Please try again."));
     }
     draftIdRef.current = payload.draft_id;
     return payload.draft_id;
@@ -178,7 +169,7 @@ export function RecordingScreen({ patientId, patientName, onCancel, onSaved }: R
     if (draftResult.status === "rejected") {
       if (mediaResult.status === "fulfilled") mediaResult.value.getTracks().forEach((track) => track.stop());
       setMode("ready");
-      setStatusMessage(draftResult.reason instanceof Error ? draftResult.reason.message : "Could not start this note.");
+      setStatusMessage(draftResult.reason instanceof Error ? draftResult.reason.message : "Could not start this update.");
       return;
     }
 
@@ -195,7 +186,7 @@ export function RecordingScreen({ patientId, patientName, onCancel, onSaved }: R
       const tokenResponse = await fetch("/api/stt-token", { cache: "no-store" });
       const tokenPayload = await tokenResponse.json().catch(() => null);
       if (!tokenResponse.ok || !tokenPayload || typeof tokenPayload.token !== "string") {
-        throw new Error(errorMessage(tokenPayload, "Live transcription is unavailable. You can type your note instead."));
+        throw new Error(errorMessage(tokenPayload, "Live transcription is unavailable. You can type your update instead."));
       }
 
       const query = new URLSearchParams({
@@ -227,7 +218,7 @@ export function RecordingScreen({ patientId, patientName, onCancel, onSaved }: R
           }
           if (!disposedRef.current && !savingRef.current) {
             const detail = event.reason ? ` (${event.reason})` : "";
-            void switchToFallback(`Live transcription disconnected${detail}. Your note can still be typed and saved.`);
+            void switchToFallback(`Live transcription disconnected${detail}. Your update can still be typed and saved.`);
           }
         };
         socket.onmessage = (event: MessageEvent<string>) => {
@@ -250,7 +241,7 @@ export function RecordingScreen({ patientId, patientName, onCancel, onSaved }: R
           } else if (message.type === "Termination") {
             updateTranscript();
           } else if (message.type === "Error") {
-            void switchToFallback(message.error || "Live transcription stopped. Type your note below to continue.");
+            void switchToFallback(message.error || "Live transcription stopped. Type your update below to continue.");
           }
         };
       });
@@ -278,12 +269,11 @@ export function RecordingScreen({ patientId, patientName, onCancel, onSaved }: R
       };
       source.connect(processor);
       processor.connect(context.destination);
-      startTimeRef.current = Date.now();
       setStatusMessage("Listening. Speak naturally; you can pause whenever you need.");
       setMode("live");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Live transcription could not start.";
-      await switchToFallback(`${message} Type your note below to continue.`);
+      await switchToFallback(`${message} Type your update below to continue.`);
     }
   }
 
@@ -296,14 +286,14 @@ export function RecordingScreen({ patientId, patientName, onCancel, onSaved }: R
       setMode("fallback");
     } catch (error) {
       setMode("ready");
-      setStatusMessage(error instanceof Error ? error.message : "Could not start this note. Please try again.");
+      setStatusMessage(error instanceof Error ? error.message : "Could not start this update. Please try again.");
     }
   }
 
   async function stopAndSave(): Promise<void> {
     const finalText = (mode === "fallback" ? typedTranscript : transcriptRef.current).trim();
     if (!finalText) {
-      toast.error("Add a few words before saving this note.");
+      toast.error("Add a few words before saving this update.");
       return;
     }
     if (!draftIdRef.current || savingRef.current) return;
@@ -344,7 +334,7 @@ export function RecordingScreen({ patientId, patientName, onCancel, onSaved }: R
       const payload = await response.json().catch(() => null);
       if (!response.ok) throw new Error(errorMessage(payload, "Could not save this transcript. Please try again."));
       toast.success("Transcript saved as a draft.");
-      onSaved(draftIdRef.current);
+      setReviewDraftId(draftIdRef.current);
     } catch (error) {
       savingRef.current = false;
       setMode("fallback");
@@ -365,33 +355,23 @@ export function RecordingScreen({ patientId, patientName, onCancel, onSaved }: R
     onCancel();
   }
 
-  const minutes = Math.floor(elapsedSeconds / 60).toString().padStart(2, "0");
-  const seconds = (elapsedSeconds % 60).toString().padStart(2, "0");
   const displayedTranscript = mode === "fallback" ? typedTranscript : transcript;
 
   return (
     <main className="care-screen care-recording flex min-h-dvh flex-col bg-background">
-      <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
-        <Button variant="ghost" onClick={() => void cancelRecording()} disabled={mode === "saving"}>
+      <header className="mx-auto flex w-full max-w-[1200px] items-center justify-start">
+        <Button variant="ghost" onClick={() => reviewDraftId ? onCancel() : void cancelRecording()} disabled={(!reviewDraftId && mode === "saving") || reviewBusy}>
           <ArrowLeft data-icon="inline-start" aria-hidden />
           Cancel
         </Button>
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <span className="flex size-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <Mic className="size-4" aria-hidden />
-          </span>
-          Recording for {patientName}
-        </div>
-        <span className="w-16 text-right font-mono text-xs tabular-nums text-muted-foreground" aria-label={`Recording time ${minutes}:${seconds}`}>
-          {minutes}:{seconds}
-        </span>
       </header>
 
+      {reviewDraftId ? <NoteReview draftId={reviewDraftId} onSaved={onSaved} onBusyChange={setReviewBusy} /> : (
       <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col px-4 pb-8 sm:px-6 lg:grid lg:grid-cols-[minmax(20rem,0.8fr)_minmax(0,1.2fr)] lg:content-start lg:gap-x-10 lg:gap-y-5 lg:px-8 lg:pt-5">
         <section className="flex flex-col items-center pt-3 text-center sm:pt-8 lg:self-center lg:justify-self-center lg:pt-10">
           <div className="relative size-40 sm:size-48"><Orb className="absolute inset-0" colors={["#7c9463", "#c3cea8"]} agentState={mode === "live" ? "listening" : mode === "connecting" ? "thinking" : null} /></div>
           <h1 className="mt-2 text-2xl font-semibold tracking-tight">
-            {mode === "live" ? "I’m listening" : mode === "fallback" ? "Your note, your words" : "Let’s capture an update"}
+            {mode === "live" ? "I'm listening" : mode === "fallback" ? "Your update, your words" : "Let's capture an update"}
           </h1>
           <p className="mt-2 max-w-md text-sm text-muted-foreground" aria-live="polite">
             {statusMessage || (mode === "ready" ? `Share how ${patientName} has been doing.` : "Preparing your recording…")}
@@ -465,7 +445,7 @@ export function RecordingScreen({ patientId, patientName, onCancel, onSaved }: R
                     displayedTranscript
                   ) : (
                   <p className="text-muted-foreground">
-                    {mode === "live" ? "I’ll show each phrase here as you speak…" : mode === "connecting" ? "Your live transcript will appear here." : "Start with how they are feeling, a measurement, or something you noticed today."}
+                    {mode === "live" ? "I'll show each phrase here as you speak…" : mode === "connecting" ? "Your live transcript will appear here." : "Start with how they are feeling, a measurement, or something you noticed today."}
                   </p>
                 )}
               </div>
@@ -500,6 +480,7 @@ export function RecordingScreen({ patientId, patientName, onCancel, onSaved }: R
         <p className="mt-3 text-center text-xs text-muted-foreground">Fictional demo information only. This is not medical advice.</p>
         </div>
       </div>
+      )}
     </main>
   );
 }

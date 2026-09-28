@@ -50,7 +50,12 @@ function resampleTo24k(input: Float32Array, inputRate: number): ArrayBuffer {
   return output.buffer;
 }
 
-export function ClarificationScreen({ draftId, mode = "clarification", candidateId, onBack, onReview }: Props) {
+export function VoiceAssistantPanel({ draftId, mode = "clarification", candidateId, onBack, onReview }: Props) {
+  const panelRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    panelRef.current?.focus({ preventScroll: true });
+    panelRef.current?.scrollIntoView({ block: "nearest", behavior: "instant" });
+  }, []);
   const [state, setState] = useState<AgentState>(null);
   const [status, setStatus] = useState(mode === "confirmation"
     ? "Start when ready to hear the draft summary and confirm it by voice."
@@ -284,11 +289,11 @@ export function ClarificationScreen({ draftId, mode = "clarification", candidate
   }
 
   return (
-    <main className="care-screen mx-auto flex min-h-dvh w-full max-w-lg flex-col px-4 pb-8 pt-5 sm:px-6">
-      <header><Button variant="ghost" onClick={() => { cleanup(true); onBack(); }}><ArrowLeft data-icon="inline-start" aria-hidden />Back to review</Button></header>
+    <section ref={panelRef} tabIndex={-1} className="care-voice-panel" aria-label="Voice assistant">
+      <header><Button variant="ghost" onClick={() => { cleanup(true); onBack(); }}><ArrowLeft data-icon="inline-start" aria-hidden />Close voice assistant</Button></header>
       <section className="mt-8 flex flex-col items-center text-center">
-        <div className="relative size-48"><Orb className="absolute inset-0" colors={["#7c9463", "#c3cea8"]} agentState={state} /></div>
-        <h1 className="mt-5 text-2xl font-semibold">{mode === "confirmation" ? "Confirm by voice" : mode === "expression" ? "Explain a phrase" : "A little more detail"}</h1>
+        <div className="relative size-32"><Orb className="absolute inset-0" colors={["#7c9463", "#c3cea8"]} agentState={state} /></div>
+        <h2 className="mt-5 text-xl font-semibold">{mode === "confirmation" ? "Confirm by voice" : mode === "expression" ? "Explain a phrase" : "A little more detail"}</h2>
         <p className="mt-2 max-w-sm text-sm text-muted-foreground">{status}</p>
       </section>
       {error && <Card className="mt-6 border-destructive/40"><CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-sm"><CircleAlert className="size-4" aria-hidden />Voice session issue</CardTitle><CardDescription>{error}</CardDescription></CardHeader></Card>}
@@ -304,6 +309,6 @@ export function ClarificationScreen({ draftId, mode = "clarification", candidate
         )}
         <p className="text-center text-xs text-muted-foreground">{mode === "confirmation" ? "Only a clear yes confirms. Say no to return and make corrections." : mode === "expression" ? "This explanation will only create a suggestion. VoiceCare will ask before remembering it." : "You can stop at any time; unanswered details will stay flagged in your review."}</p>
       </CardContent></Card>
-    </main>
+    </section>
   );
 }

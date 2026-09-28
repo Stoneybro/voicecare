@@ -143,7 +143,7 @@ function familyText(report: Report): string {
   return `${report.patient_name}'s update${when}: ${details || "No measurements or observations were recorded"}.`;
 }
 
-export function ReportHistory({ patientId, onSelect }: { patientId: string | null; onSelect: (id: string) => void }) {
+export function ReportHistory({ patientId, patientName, onSelect }: { patientId: string | null; patientName: string | null; onSelect: (id: string) => void }) {
   const [reports, setReports] = useState<ReportSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -172,7 +172,7 @@ export function ReportHistory({ patientId, onSelect }: { patientId: string | nul
   if (loading) return <Card className="mt-3"><CardContent className="flex items-center gap-2 py-5 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" aria-hidden />Loading saved reports...</CardContent></Card>;
   if (error) return <Card className="mt-3"><CardContent className="py-5 text-sm text-destructive">{error}</CardContent></Card>;
   if (!reports.length) return (
-    <Empty className="mt-5 min-h-64 border"><EmptyHeader><EmptyMedia variant="icon"><FileText aria-hidden /></EmptyMedia><EmptyTitle>Their story starts with a note.</EmptyTitle><EmptyDescription>Create your first care note. Once you review and save it, you can find it here whenever you need it.</EmptyDescription></EmptyHeader></Empty>
+    <Empty className="mt-5 min-h-64 border"><EmptyHeader><EmptyMedia variant="icon"><FileText aria-hidden /></EmptyMedia><EmptyTitle>{patientName ? `No updates for ${patientName} yet` : "No saved updates yet"}</EmptyTitle><EmptyDescription>Start a voice update and save it to build a history here.</EmptyDescription></EmptyHeader></Empty>
   );
   return <div className="mt-3 flex flex-col gap-2">
     {reports.map((report) => (
@@ -191,7 +191,7 @@ export function ReportHistory({ patientId, onSelect }: { patientId: string | nul
   </div>;
 }
 
-export function ReportDetailScreen({ reportId, onBack }: { reportId: string; onBack: () => void }) {
+export function ReportDetailPanel({ reportId, onBack }: { reportId: string; onBack: () => void }) {
   const [report, setReport] = useState<Report | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -214,8 +214,8 @@ export function ReportDetailScreen({ reportId, onBack }: { reportId: string; onB
     return () => { active = false; };
   }, [reportId]);
 
-  if (loading) return <main className="mx-auto flex min-h-dvh max-w-2xl items-center justify-center gap-2 p-6 text-sm text-muted-foreground"><LoaderCircle className="size-5 animate-spin" aria-hidden />Opening saved report...</main>;
-  if (error || !report) return <main className="mx-auto flex min-h-dvh max-w-md flex-col items-center justify-center gap-4 p-6 text-center"><p className="text-sm text-destructive">{error ?? "Report unavailable."}</p><Button variant="outline" onClick={onBack}><ArrowLeft data-icon="inline-start" aria-hidden />History</Button></main>;
+  if (loading) return <section className="mx-auto flex min-h-48 max-w-2xl items-center justify-center gap-2 p-6 text-sm text-muted-foreground"><LoaderCircle className="size-5 animate-spin" aria-hidden />Opening saved report...</section>;
+  if (error || !report) return <section className="mx-auto flex min-h-48 max-w-md flex-col items-center justify-center gap-4 p-6 text-center"><p className="text-sm text-destructive">{error ?? "Report unavailable."}</p><Button variant="outline" onClick={onBack}><ArrowLeft data-icon="inline-start" aria-hidden />History</Button></section>;
 
   const jsonData = {
     report_id: report.id,
@@ -225,9 +225,9 @@ export function ReportDetailScreen({ reportId, onBack }: { reportId: string; onB
     observations: report.observations,
   };
   return (
-    <main className="care-screen care-report mx-auto w-full max-w-4xl px-4 pb-10 pt-5 sm:px-6">
+    <section className="care-report w-full pb-4">
       <header className="flex flex-wrap items-center justify-between gap-2 print:hidden">
-        <Button variant="ghost" onClick={onBack}><ArrowLeft data-icon="inline-start" aria-hidden />History</Button>
+
         <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="outline" onClick={() => downloadFile(`voicecare-${report.id}-doctor.txt`, doctorText(report), "text/plain;charset=utf-8")}><Download data-icon="inline-start" aria-hidden />Doctor summary</Button>
           <Button size="sm" variant="outline" onClick={() => downloadFile(`voicecare-${report.id}-family.txt`, familyText(report), "text/plain;charset=utf-8")}><Download data-icon="inline-start" aria-hidden />Family summary</Button>
@@ -239,7 +239,7 @@ export function ReportDetailScreen({ reportId, onBack }: { reportId: string; onB
 
       <article id="print-summary" className="mt-5 flex flex-col gap-5">
         <section>
-          <Badge variant="secondary">Confirmed report · revision {report.confirmed_revision}</Badge>
+          <Badge variant="secondary">Confirmed update · revision {report.confirmed_revision}</Badge>
           <h1 className="mt-3 text-2xl font-semibold">Care update for {report.patient_name}</h1>
           <p className="mt-1 text-sm text-muted-foreground">Observed {report.observation_time ? new Date(report.observation_time).toLocaleString() : "time not recorded"}</p>
         </section>
@@ -259,6 +259,6 @@ export function ReportDetailScreen({ reportId, onBack }: { reportId: string; onB
         <details className="print:hidden"><summary className="cursor-pointer text-sm font-medium">Original transcript</summary><p className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">{report.original_transcript}</p></details>
         <p className="text-xs text-muted-foreground">Confirmed {new Date(report.confirmed_at).toLocaleString()} · saved {new Date(report.saved_at).toLocaleString()}. This caregiver-recorded report is not a diagnosis.</p>
       </article>
-    </main>
+    </section>
   );
 }

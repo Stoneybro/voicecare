@@ -7,8 +7,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
-  CalendarClock,
-  Brain,
+  ArrowLeft,
   Check,
   Mic,
   Plus,
@@ -18,7 +17,6 @@ import {
 import type { BootstrapPayload } from "@/lib/bootstrap";
 import { CareBrand } from "@/components/care-identity";
 import { Orb } from "@/components/ui/orb";
-import { Badge } from "@/components/ui/badge";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -32,10 +30,9 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { RecordingScreen } from "@/components/recording-screen";
-import { ReviewScreen } from "@/components/review-screen";
-import { ReportDetailScreen, ReportHistory } from "@/components/report-screens";
-import { PersonalExpressionsScreen } from "@/components/personal-expressions-screen";
+import { CareNoteWorkspace } from "@/components/recording-screen";
+import { ReportDetailPanel, ReportHistory } from "@/components/report-screens";
+import { RememberedPhrasesPanel } from "@/components/personal-expressions-screen";
 
 // The selected patient is remembered per browser so the judge lands on the same person (1.5).
 const LAST_PATIENT_KEY = "voicecare:last-patient-id";
@@ -71,8 +68,8 @@ export default function HomeScreen() {
   const [newPatientName, setNewPatientName] = useState("");
   const [isAddingPatient, setIsAddingPatient] = useState(false);
   const [recordingPatientId, setRecordingPatientId] = useState<string | null>(null);
-  const [reviewDraftId, setReviewDraftId] = useState<string | null>(null);
   const [reportDetailId, setReportDetailId] = useState<string | null>(null);
+  const [reportLibraryOpen, setReportLibraryOpen] = useState(false);
   const [expressionsOpen, setExpressionsOpen] = useState(false);
 
   // Cold start (1.3): the very first render fetches the workspace; the server creates the
@@ -188,15 +185,47 @@ export default function HomeScreen() {
 
   if (!data) {
     return (
-      <main aria-label="Loading VoiceCare" className="mx-auto w-full max-w-md flex-1 p-4">
-        <div className="mt-10 flex flex-col items-center gap-4">
-          <Skeleton className="size-40 rounded-full" />
-          <Skeleton className="h-10 w-56" />
-          <Skeleton className="h-4 w-72" />
-        </div>
-        <div className="mt-10 flex flex-col gap-3">
-          <Skeleton className="h-16 w-full rounded-xl" />
-          <Skeleton className="h-28 w-full rounded-xl" />
+      <main aria-label="Loading VoiceCare" className="care-home">
+        <header className="care-home-header">
+          <CareBrand />
+          <Skeleton className="h-10 w-24 rounded-full" />
+        </header>
+
+        <section className="care-patient-bar" aria-hidden="true">
+          <Skeleton className="h-4 w-40" />
+          <div className="flex w-full flex-wrap items-center gap-3">
+            <div className="flex flex-wrap gap-2">
+              <Skeleton className="h-11 w-28 rounded-full" />
+              <Skeleton className="h-11 w-28 rounded-full" />
+            </div>
+            <Skeleton className="h-11 w-28 rounded-full" />
+          </div>
+        </section>
+
+        <div className="care-home-grid" aria-hidden="true">
+          <section className="care-capture">
+            <Skeleton className="size-40 rounded-full sm:size-44" />
+            <Skeleton className="mt-4 h-10 w-64 max-w-full" />
+            <div className="mt-4 flex w-full flex-col items-center gap-2">
+              <Skeleton className="h-4 w-64 max-w-full" />
+              <Skeleton className="h-4 w-48 max-w-full" />
+            </div>
+            <Skeleton className="mt-6 h-12 w-52 max-w-full rounded-full" />
+            <Skeleton className="mt-6 h-4 w-64 max-w-full" />
+          </section>
+
+          <section className="care-journal">
+            <div className="flex items-center justify-between gap-3">
+              <Skeleton className="h-8 w-40" />
+              <Skeleton className="h-9 w-32 rounded-md" />
+            </div>
+            <Skeleton className="mt-3 h-4 w-52 max-w-full" />
+            <div className="mt-5 flex flex-col gap-2">
+              <Skeleton className="h-20 w-full rounded-xl" />
+              <Skeleton className="h-20 w-full rounded-xl" />
+              <Skeleton className="h-20 w-full rounded-xl" />
+            </div>
+          </section>
         </div>
       </main>
     );
@@ -204,36 +233,63 @@ export default function HomeScreen() {
 
   if (recordingPatient) {
     return (
-      <RecordingScreen
+      <CareNoteWorkspace
         patientId={recordingPatient.id}
         patientName={recordingPatient.display_name}
         onCancel={() => setRecordingPatientId(null)}
-        onSaved={(draftId) => {
+        onSaved={(reportId) => {
           setRecordingPatientId(null);
-          setReviewDraftId(draftId);
+          setReportLibraryOpen(true);
+          setReportDetailId(reportId);
+          toast.success("Care update saved.");
+          void loadWorkspace();
         }}
       />
     );
   }
 
-  if (reviewDraftId) {
-    return <ReviewScreen
-      draftId={reviewDraftId}
-      onBack={() => setReviewDraftId(null)}
-      onSaved={(reportId) => {
-        setReviewDraftId(null);
-        setReportDetailId(reportId);
-        void loadWorkspace();
-      }}
-    />;
-  }
-
-  if (reportDetailId) {
-    return <ReportDetailScreen reportId={reportDetailId} onBack={() => setReportDetailId(null)} />;
-  }
-
-  if (expressionsOpen) {
-    return <PersonalExpressionsScreen onBack={() => setExpressionsOpen(false)} />;
+  if (reportLibraryOpen || reportDetailId) {
+    return (
+      <main className="care-home care-library">
+        <header className="care-home-header">
+          <Button variant="ghost" onClick={() => {
+            if (reportDetailId) setReportDetailId(null);
+            else setReportLibraryOpen(false);
+          }}>
+            <ArrowLeft data-icon="inline-start" aria-hidden />
+            {reportDetailId ? "All updates" : "Care journal"}
+          </Button>
+          <CareBrand />
+        </header>
+        {reportDetailId ? (
+          <>
+            <div className="care-library-heading">
+              <p className="eyebrow">{selectedPatient?.display_name ?? "Care journal"}</p>
+              <h1>Care update</h1>
+              <p>Confirmed details, measurements, and the original spoken account.</p>
+            </div>
+            <ReportDetailPanel reportId={reportDetailId} onBack={() => setReportDetailId(null)} />
+          </>
+        ) : (
+          <>
+            <div className="care-library-heading">
+              <p className="eyebrow">{selectedPatient?.display_name ?? "Care journal"}</p>
+              <h1>Saved updates</h1>
+              <p>A clear history of what you have noticed and recorded.</p>
+            </div>
+            <div className="care-library-filter">
+              <span className="text-sm font-medium">Showing updates for</span>
+              <div className="flex flex-wrap gap-2" role="group" aria-label="Filter updates by person">
+                {data.patients.map((patient) => (
+                  <Button key={patient.id} size="sm" variant={patient.id === selectedPatientId ? "default" : "outline"} onClick={() => setSelectedPatientId(patient.id)} aria-pressed={patient.id === selectedPatientId}>{patient.display_name}</Button>
+                ))}
+              </div>
+            </div>
+            <ReportHistory patientId={selectedPatient?.id ?? null} patientName={selectedPatient?.display_name ?? null} onSelect={(id) => { setReportLibraryOpen(true); setReportDetailId(id); }} />
+          </>
+        )}
+      </main>
+    );
   }
 
   // __SPLIT_2__
@@ -242,15 +298,13 @@ export default function HomeScreen() {
       <header className="care-home-header">
         <CareBrand />
         <nav className="flex flex-wrap items-center gap-1" aria-label="Workspace tools">
-          <Button variant="outline" onClick={() => setExpressionsOpen(true)}>
-            <Brain data-icon="inline-start" aria-hidden />Remembered phrases
-          </Button>
+          <Button variant="outline" onClick={() => setExpressionsOpen(true)}>Phrases</Button>
 
         </nav>
       </header>
 
       <section className="care-patient-bar" aria-labelledby="patient-heading">
-        <h2 id="patient-heading" className="text-sm font-medium">Who is this note about?</h2>
+        <h2 id="patient-heading" className="text-sm font-medium">Who are you caring for?</h2>
         <div className="flex min-w-0 flex-wrap items-center gap-3">
           <div className="flex flex-wrap gap-2" role="group" aria-label="Choose a patient">
             {data.patients.map((patient) => (
@@ -269,23 +323,30 @@ export default function HomeScreen() {
         <section className="care-capture" aria-labelledby="capture-heading">
           <div className="relative size-40 sm:size-44"><Orb className="absolute inset-0" colors={["#7c9463", "#c3cea8"]} agentState={null} /></div>
           <h1 id="capture-heading">{selectedPatient ? <>How is {selectedPatient.display_name}<br />doing today?</> : "Who are you caring for today?"}</h1>
-          <p>How they slept. What they ate. A reading you took. Start with whatever is on your mind.</p>
+          <p>Share how they’re feeling, what’s changed, or any readings you’ve taken.</p>
           <Button size="lg" className="mt-6 max-w-full h-auto min-h-12 whitespace-normal" onClick={() => selectedPatient && setRecordingPatientId(selectedPatient.id)} disabled={!selectedPatient}>
-            <Mic data-icon="inline-start" aria-hidden />Speak about {selectedPatient?.display_name ?? "your loved one"}
+            <Mic data-icon="inline-start" aria-hidden />Start a voice update
           </Button>
-          <div className="care-capture-foot"><span className="care-small-dot" />Speak naturally. Review before you save.</div>
+          <div className="care-capture-foot"><span className="care-small-dot" />Speak freely. VoiceCare keeps up in real time.</div>
         </section>
 
         <section className="care-journal" aria-labelledby="history-heading">
-          <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="history-heading">Saved reports</h2><Badge variant="secondary">{data.reports_count} saved in workspace</Badge></div>
+          <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="history-heading">Recent updates</h2><Button variant="ghost" size="sm" onClick={() => setReportLibraryOpen(true)}>All saved updates</Button></div>
           <p className="mt-2 text-sm text-muted-foreground">{selectedPatient ? `Showing updates for ${selectedPatient.display_name}` : "Choose a person to see their updates"}</p>
-          <ReportHistory patientId={selectedPatient?.id ?? null} onSelect={setReportDetailId} />
+          <ReportHistory patientId={selectedPatient?.id ?? null} patientName={selectedPatient?.display_name ?? null} onSelect={(id) => { setReportLibraryOpen(true); setReportDetailId(id); }} />
         </section>
       </div>
 
-      <footer className="care-home-footer"><span>Hackathon demo · Fictional information only · Not medical advice</span><span className="flex items-center gap-2"><CalendarClock className="size-3.5" aria-hidden />Session ends {new Date(data.session.expires_at).toLocaleString()}</span>          <Button variant="ghost" size="sm" onClick={() => void handleResetDemo()} disabled={isResetting}>
+      <footer className="care-home-footer"><span>Hackathon demo · Fictional information only · Not medical advice</span>          <Button variant="ghost" size="sm" onClick={() => void handleResetDemo()} disabled={isResetting}>
             <RotateCcw data-icon="inline-start" aria-hidden />{isResetting ? "Resetting..." : "Reset demo"}
           </Button></footer>
+
+      <Dialog open={expressionsOpen} onOpenChange={setExpressionsOpen}>
+        <DialogContent className="care-phrases-dialog max-h-[85dvh] overflow-y-auto p-6 sm:max-w-lg">
+          <DialogHeader className="pr-10"><DialogTitle>Saved phrases</DialogTitle><DialogDescription>VoiceCare can remember phrases you explain, with your permission.</DialogDescription></DialogHeader>
+          <RememberedPhrasesPanel />
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={addDialogOpen}
@@ -328,4 +389,3 @@ export default function HomeScreen() {
     </main>
   );
 }
-
