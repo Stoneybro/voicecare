@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { getSql } from "@/lib/db";
-import { extractTranscript } from "@/lib/extraction";
 import { loadPersonalExpressions } from "@/lib/expressions";
+import { extractTranscriptWithModel } from "@/lib/llm-extraction";
 import { ApiError, handle, jsonOk, readJson } from "@/lib/http";
 import { newId, requireSession } from "@/lib/session";
 
@@ -66,9 +66,9 @@ export async function PATCH(
     const sql = getSql();
     if (!("original_transcript" in patch)) {
       const existingRows = (await sql`
-        select id, patient_id, revision, status, unresolved_issues, original_transcript from drafts
+        select id, patient_id, revision, status, unresolved_issues, original_transcript, created_at from drafts
         where id = ${id} and caregiver_id = ${session.caregiverId} limit 1
-      `) as Array<{ id: string; patient_id: string; revision: number; status: string; unresolved_issues: unknown; original_transcript: string }>;
+      `) as Array<{ id: string; patient_id: string; revision: number; status: string; unresolved_issues: unknown; original_transcript: string; created_at: string }>;
       const existing = existingRows[0];
       if (!existing) throw new ApiError(404, "draft_not_found", "That draft could not be found in this demo workspace.");
       if (!["NEEDS_CLARIFICATION", "REVIEWABLE"].includes(existing.status)) {
@@ -76,7 +76,12 @@ export async function PATCH(
       }
 
       const personalExpressions = await loadPersonalExpressions(session.caregiverId, existing.patient_id);
-      const baseline = extractTranscript(existing.original_transcript, { timeZone: session.timezone, personalExpressions });
+      const baseline = await extractTranscriptWithModel(existing.original_transcript, {
+        timeZone: session.timezone,
+        now: new Date(existing.created_at),
+        patientName: session.patients.find((patient) => patient.id === existing.patient_id)?.display_name,
+        personalExpressions,
+      });
       const baselineIssues = baseline.unresolved_issues;
       const correctedMeasurements = patch.measurements.map((measurement) => ({
         ...measurement,
@@ -147,6 +152,7 @@ export async function PATCH(
               observation_time_precision = ${patch.observation_time_precision},
               observation_time_source = ${patch.observation_time_source},
               unresolved_issues = ${JSON.stringify(unresolvedIssues)}::jsonb,
+              clarification_log = clarification_log || ${JSON.stringify(baseline.expression_candidates.map((candidate) => ({ resolved: true, expression_candidate: candidate })))}::jsonb,
               confirmed_revision = null,
               confirmation_method = null,
               confirmed_at = null,
@@ -183,10 +189,15 @@ export async function PATCH(
 
     const transcript = patch.original_transcript;
     const revisionId = newId("rev");
-    const ownerRows = await sql`select patient_id from drafts where id = ${id} and caregiver_id = ${session.caregiverId} limit 1` as Array<{ patient_id: string }>;
+    const ownerRows = await sql`select patient_id, created_at from drafts where id = ${id} and caregiver_id = ${session.caregiverId} limit 1` as Array<{ patient_id: string; created_at: string }>;
     if (!ownerRows[0]) throw new ApiError(404, "draft_not_found", "That recording could not be found in this demo workspace.");
     const personalExpressions = await loadPersonalExpressions(session.caregiverId, ownerRows[0].patient_id);
-    const extraction = extractTranscript(transcript, { timeZone: session.timezone, personalExpressions });
+    const extraction = await extractTranscriptWithModel(transcript, {
+      timeZone: session.timezone,
+      now: new Date(ownerRows[0].created_at),
+      patientName: session.patients.find((patient) => patient.id === ownerRows[0].patient_id)?.display_name,
+      personalExpressions,
+    });
     const status = extraction.unresolved_issues.length > 0 ? "NEEDS_CLARIFICATION" : "REVIEWABLE";
 
     // Update and append the immutable revision snapshot in one statement. The owner and state
@@ -203,6 +214,7 @@ export async function PATCH(
             observation_time_precision = ${extraction.observation_time_precision},
             observation_time_source = ${extraction.observation_time_source},
             unresolved_issues = ${JSON.stringify(extraction.unresolved_issues)}::jsonb,
+            clarification_log = clarification_log || ${JSON.stringify(extraction.expression_candidates.map((candidate) => ({ resolved: true, expression_candidate: candidate })))}::jsonb,
             updated_at = now()
         where id = ${id}
           and caregiver_id = ${session.caregiverId}
@@ -280,7 +292,12 @@ export async function GET(
       select d.id, d.patient_id, p.display_name as patient_name, d.revision, d.status,
         d.original_transcript, d.measurements, d.observations, d.observation_time,
         d.observation_time_precision, d.observation_time_source, d.unresolved_issues,
-        d.confirmation_method, d.confirmed_at, d.confirmed_revision
+        d.confirmation_method, d.confirmed_at, d.confirmed_revision, d.clarification_log,
+        coalesce((
+          select jsonb_agg(lower(e.phrase)) from personal_expressions e
+          where e.caregiver_id = d.caregiver_id and e.deleted_at is null
+            and (e.patient_id = d.patient_id or e.patient_id is null)
+        ), '[]'::jsonb) as remembered_phrases
       from drafts d
       join patients p on p.id = d.patient_id and p.caregiver_id = d.caregiver_id
       where d.id = ${id} and d.caregiver_id = ${session.caregiverId}
@@ -301,6 +318,8 @@ export async function GET(
       confirmation_method: string | null;
       confirmed_at: string | null;
       confirmed_revision: number | null;
+      clarification_log: unknown;
+      remembered_phrases: unknown;
     }>;
 
     const draft = rows[0];
@@ -308,7 +327,41 @@ export async function GET(
     if (!["NEEDS_CLARIFICATION", "REVIEWABLE", "CONFIRMED"].includes(draft.status)) {
       throw new ApiError(409, "draft_not_ready", "This draft is not ready for review yet.");
     }
-    return jsonOk({ draft });
+    const log = Array.isArray(draft.clarification_log)
+      ? draft.clarification_log as Array<{
+        resolved?: boolean;
+        source?: string;
+        expression_candidate_id?: string;
+        expression_candidate?: { candidate_id?: string; phrase?: string; source_text?: string };
+        memory_suggestion?: { suggestion_id?: string; phrase?: string; measurement_type?: string; unit?: string | null };
+      }>
+      : [];
+    const suggestions = new Map<string, { suggestion_id: string; phrase: string; measurement_type: string; unit: string | null; patient_id: string; patient_name: string }>();
+    const candidates = new Map<string, { candidate_id: string; phrase: string; source_text: string; patient_id: string; patient_name: string }>();
+    const resolvedCandidateIds = new Set(log.map((entry) => entry.expression_candidate_id).filter((id): id is string => typeof id === "string"));
+    const rememberedPhrases = new Set(Array.isArray(draft.remembered_phrases)
+      ? draft.remembered_phrases.filter((phrase): phrase is string => typeof phrase === "string")
+      : []);
+    for (const entry of log) {
+      const suggestion = entry.resolved && entry.source !== "llm_expression_suggestion" ? entry.memory_suggestion : null;
+      if (suggestion && typeof suggestion.suggestion_id === "string" && typeof suggestion.phrase === "string" &&
+        typeof suggestion.measurement_type === "string" && !rememberedPhrases.has(suggestion.phrase.toLocaleLowerCase())) {
+        suggestions.set(suggestion.suggestion_id, {
+          suggestion_id: suggestion.suggestion_id,
+          phrase: suggestion.phrase,
+          measurement_type: suggestion.measurement_type,
+          unit: typeof suggestion.unit === "string" ? suggestion.unit : null,
+          patient_id: draft.patient_id,
+          patient_name: draft.patient_name,
+        });
+      }
+      const candidate = entry.resolved ? entry.expression_candidate : null;
+      if (candidate && typeof candidate.candidate_id === "string" && typeof candidate.phrase === "string" &&
+        typeof candidate.source_text === "string" && !resolvedCandidateIds.has(candidate.candidate_id)) {
+        candidates.set(candidate.candidate_id, { ...candidate as { candidate_id: string; phrase: string; source_text: string }, patient_id: draft.patient_id, patient_name: draft.patient_name });
+      }
+    }
+    return jsonOk({ draft, expression_candidates: [...candidates.values()], expression_suggestions: [...suggestions.values()], ai_extraction_available: Boolean(process.env.GEMINI_API_KEY) });
   });
 }
 

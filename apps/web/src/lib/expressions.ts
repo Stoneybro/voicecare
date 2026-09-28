@@ -4,7 +4,7 @@ import type { MeasurementType } from "@/lib/extraction";
 
 export type PersonalExpression = {
   phrase: string;
-  normalized_meaning: { measurement_type: MeasurementType; unit: string };
+  normalized_meaning: { measurement_type: MeasurementType; unit: string | null };
   context_constraints?: Record<string, unknown>;
 };
 
@@ -12,7 +12,13 @@ export type ExpressionSuggestion = {
   suggestion_id: string;
   phrase: string;
   measurement_type: MeasurementType;
-  unit: string;
+  unit: string | null;
+};
+
+export type ExpressionCandidate = {
+  candidate_id: string;
+  phrase: string;
+  source_text: string;
 };
 
 const canonicalLabels: Record<MeasurementType, string> = {
@@ -27,6 +33,40 @@ export function canonicalLabel(type: MeasurementType): string {
   return canonicalLabels[type];
 }
 
+export function resolveExpressionSuggestion(phrase: string, answer: string): ExpressionSuggestion | null {
+  const normalizedAnswer = answer.replaceAll("_", " ");
+  const categories: Array<{ type: MeasurementType; pattern: RegExp }> = [
+    { type: "blood_pressure", pattern: /\b(?:blood\s+pressure|bp|pressure\s+(?:reading|cuff))\b/i },
+    { type: "blood_glucose", pattern: /\b(?:blood\s+sugar|blood\s+glucose|glucose|sugar)\b/i },
+    { type: "temperature", pattern: /\b(?:temperature|temp|fever\s+reading)\b/i },
+    { type: "heart_rate", pattern: /\b(?:heart\s+rate|pulse)\b/i },
+    { type: "spo2", pattern: /\b(?:oxygen\s+saturation|oxygen\s+level|spo\s*2|spo2)\b/i },
+  ];
+  const matched = categories.filter((category) => category.pattern.test(normalizedAnswer));
+  if (matched.length !== 1) return null;
+
+  const type = matched[0].type;
+  const unit = type === "blood_pressure" ? "mmHg"
+    : type === "heart_rate" ? "bpm"
+      : type === "spo2" ? "%"
+        : type === "blood_glucose" && /\bmg\s*\/?\s*dl\b/i.test(answer) ? "mg/dL"
+          : type === "blood_glucose" && /\bmmol\s*\/?\s*l\b/i.test(answer) ? "mmol/L"
+            : type === "temperature" && /celsius|degrees?\s*c|°\s*c/i.test(answer) ? "°C"
+              : type === "temperature" && /fahrenheit|degrees?\s*f|°\s*f/i.test(answer) ? "°F"
+                : null;
+  return createExpressionSuggestion(phrase, type, unit);
+}
+
+export function createExpressionSuggestion(
+  phrase: string,
+  measurementType: MeasurementType,
+  unit: string | null,
+): ExpressionSuggestion {
+  const normalizedPhrase = phrase.trim().toLocaleLowerCase();
+  const suggestionId = createHash("sha256").update(`${normalizedPhrase}:${measurementType}:${unit ?? ""}`).digest("hex").slice(0, 24);
+  return { suggestion_id: suggestionId, phrase: phrase.trim(), measurement_type: measurementType, unit };
+}
+
 export async function loadPersonalExpressions(caregiverId: string, patientId: string): Promise<PersonalExpression[]> {
   const rows = await getSql()`
     select phrase, normalized_meaning, context_constraints
@@ -37,14 +77,15 @@ export async function loadPersonalExpressions(caregiverId: string, patientId: st
   ` as Array<{ phrase: string; normalized_meaning: unknown; context_constraints: unknown }>;
   return rows.flatMap((row) => {
     const meaning = row.normalized_meaning as { measurement_type?: unknown; unit?: unknown } | null;
-    if (!meaning || typeof meaning.measurement_type !== "string" || typeof meaning.unit !== "string") return [];
+    if (!meaning || typeof meaning.measurement_type !== "string" ||
+      (meaning.unit !== null && typeof meaning.unit !== "string")) return [];
     if (!Object.hasOwn(canonicalLabels, meaning.measurement_type)) return [];
     const constraints = row.context_constraints && typeof row.context_constraints === "object" && !Array.isArray(row.context_constraints)
       ? row.context_constraints as Record<string, unknown>
       : {};
     return [{
       phrase: row.phrase,
-      normalized_meaning: { measurement_type: meaning.measurement_type as MeasurementType, unit: meaning.unit },
+      normalized_meaning: { measurement_type: meaning.measurement_type as MeasurementType, unit: meaning.unit ?? null },
       context_constraints: constraints,
     }];
   });
@@ -98,6 +139,18 @@ export function detectExpressionSuggestion(text: string): ExpressionSuggestion |
     { type: "temperature", pattern: "temperature|temp", unit: null },
   ];
   const unitPattern = "(mg\\s*\\/?\\s*dl|mmol\\s*\\/?\\s*l|celsius|fahrenheit|degrees?\\s*[cf]|°\\s*[cf])";
+  // The templates contain an unnecessary escaped quote (invalid under `/u`) and older
+  // smart-quote/degree mojibake; normalize these before compiling the dynamic patterns.
+  const normalizeRegexSource = (source: string) => source
+    .replaceAll(String.fromCharCode(92, 34), '"')
+    .replaceAll(String.fromCharCode(0xe2, 0x20ac, 0x153), "“")
+    .replaceAll(String.fromCharCode(0xe2, 0x20ac, 0x9d), "”")
+    .replaceAll(String.fromCharCode(0xc2, 0xb0), "°");
+  const RegExp = class extends globalThis.RegExp {
+    constructor(pattern: string, flags?: string) {
+      super(normalizeRegexSource(pattern), flags);
+    }
+  };
   const mappingPatterns = [
     new RegExp(`(?:remember(?:\\s+that)?\\s+)?[\\"'“”]?([\\p{L}\\p{N}_-]+(?:\\s+[\\p{L}\\p{N}_-]+){0,3})[\\"'“”]?\\s+(?:means|refers\\s+to|is)\\s+(?:the\\s+)?(${types.map((item) => `(?:${item.pattern})`).join("|")})(?:\\s+(?:in|measured\\s+in)\\s+${unitPattern})?`, "iu"),
     new RegExp(`(?:I|we)\\s+call\\s+[\\"'“”]?([\\p{L}\\p{N}_-]+(?:\\s+[\\p{L}\\p{N}_-]+){0,3})[\\"'“”]?\\s+(?:the\\s+)?(${types.map((item) => `(?:${item.pattern})`).join("|")})(?:\\s+(?:in|measured\\s+in)\\s+${unitPattern})?`, "iu"),
@@ -121,8 +174,12 @@ export function detectExpressionSuggestion(text: string): ExpressionSuggestion |
       if (/celsius|°\s*c|degrees?\s*c/.test(declaredUnit)) unit = "°C";
       else if (/fahrenheit|°\s*f|degrees?\s*f/.test(declaredUnit)) unit = "°F";
     }
-    // A learned glucose/temperature alias must carry its scale or it would simply re-create a blocker.
-    if (!unit) continue;
+    if (mapping.type === "temperature") {
+      const degree = String.fromCharCode(0x00b0);
+      if (declaredUnit.includes(`${degree}c`) || /celsius|degrees?\s*c/.test(declaredUnit)) unit = `${degree}C`;
+      else if (declaredUnit.includes(`${degree}f`) || /fahrenheit|degrees?\s*f/.test(declaredUnit)) unit = `${degree}F`;
+    }
+    // Unitless aliases still help identify glucose/temperature; extraction will keep asking for the scale.
     const suggestionId = createHash("sha256").update(`${normalized}:${mapping.type}:${unit}`).digest("hex").slice(0, 24);
     return { suggestion_id: suggestionId, phrase, measurement_type: mapping.type, unit };
   }

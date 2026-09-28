@@ -1,5 +1,7 @@
 "use client";
 
+import { Empty, EmptyHeader, EmptyMedia, EmptyTitle, EmptyDescription } from "@/components/ui/empty";
+
 import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft, Brain, CircleAlert, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -10,7 +12,7 @@ type Expression = {
   phrase: string;
   patient_id: string | null;
   patient_name: string | null;
-  normalized_meaning: { measurement_type?: string; unit?: string };
+  normalized_meaning: { measurement_type?: string; unit?: string | null };
 };
 
 function errorMessage(payload: unknown, fallback: string): string {
@@ -61,12 +63,12 @@ export function PersonalExpressionsScreen({ onBack }: { onBack: () => void }) {
     }
   }
 
-  return <main className="mx-auto flex min-h-dvh w-full max-w-lg flex-col px-4 pb-8 pt-5 sm:px-6">
+  return <main className="care-screen mx-auto flex min-h-dvh w-full max-w-2xl flex-col px-4 pb-8 pt-5 sm:px-6">
     <header><Button variant="ghost" onClick={onBack}><ArrowLeft data-icon="inline-start" aria-hidden />Back</Button></header>
-    <section className="mt-6"><h1 className="text-2xl font-semibold">Remembered phrases</h1><p className="mt-2 text-sm text-muted-foreground">VoiceCare only saves a phrase after you choose “Yes, remember.” You can remove one at any time.</p></section>
+    <section className="mt-6"><p className="eyebrow mb-3">IN YOUR OWN WORDS</p><h1 className="text-2xl font-semibold">Remembered phrases</h1><p className="mt-2 text-sm text-muted-foreground">VoiceCare only saves a phrase after you choose “Yes, remember.” You can remove one at any time.</p></section>
     {error && <Card className="mt-5 border-destructive/40"><CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-sm"><CircleAlert className="size-4" aria-hidden />Could not update phrases</CardTitle><CardDescription>{error}</CardDescription></CardHeader><CardContent><Button variant="outline" onClick={() => void load()}>Try again</Button></CardContent></Card>}
     <section className="mt-5 flex flex-col gap-3" aria-live="polite">
-      {loading ? <p className="text-sm text-muted-foreground">Loading remembered phrases…</p> : expressions.length === 0 ? <Card><CardContent className="flex flex-col items-center gap-2 p-8 text-center"><Brain className="size-8 text-muted-foreground" aria-hidden /><p className="font-medium">No phrases remembered yet</p><p className="text-sm text-muted-foreground">When VoiceCare offers to remember a phrase during clarification, choose Yes.</p></CardContent></Card> : expressions.map((expression) => <Card key={expression.id}><CardContent className="flex items-center justify-between gap-3 p-4"><div className="min-w-0"><p className="font-medium">“{expression.phrase}” <span className="text-muted-foreground">means</span> {expression.normalized_meaning.measurement_type?.replaceAll("_", " ")}</p><p className="mt-1 text-xs text-muted-foreground">{expression.patient_name ?? "All patients"}{expression.normalized_meaning.unit ? ` · ${expression.normalized_meaning.unit}` : ""}</p></div><Button aria-label={`Delete ${expression.phrase}`} title="Delete phrase" variant="ghost" size="icon" disabled={deleting === expression.id} onClick={() => void remove(expression)}><Trash2 className="size-4" aria-hidden /></Button></CardContent></Card>)}
+      {loading ? <p className="text-sm text-muted-foreground">Loading remembered phrases…</p> : expressions.length === 0 ? <Empty className="min-h-64 border"><EmptyHeader><EmptyMedia variant="icon"><Brain aria-hidden /></EmptyMedia><EmptyTitle>A little understanding goes a long way.</EmptyTitle><EmptyDescription>When you explain a phrase during review, you can choose to remember it for next time. The phrases you save will live here.</EmptyDescription></EmptyHeader></Empty> : expressions.map((expression) => <Card key={expression.id}><CardContent className="flex items-center justify-between gap-3 p-4"><div className="min-w-0"><p className="font-medium">“{expression.phrase}” <span className="text-muted-foreground">means</span> {expression.normalized_meaning.measurement_type?.replaceAll("_", " ")}</p><p className="mt-1 text-xs text-muted-foreground">{expression.patient_name ?? "All patients"}{expression.normalized_meaning.unit ? ` · ${expression.normalized_meaning.unit}` : ""}</p></div><Button aria-label={`Delete ${expression.phrase}`} title="Delete phrase" variant="ghost" size="icon" disabled={deleting === expression.id} onClick={() => void remove(expression)}><Trash2 className="size-4" aria-hidden /></Button></CardContent></Card>)}
     </section>
   </main>;
 }

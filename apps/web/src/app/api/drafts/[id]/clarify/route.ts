@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { amendTranscriptForClarification, type ClarificationIssue } from "@/lib/clarification";
 import { getSql } from "@/lib/db";
-import { extractTranscript } from "@/lib/extraction";
 import { detectExpressionSuggestion, loadPersonalExpressions } from "@/lib/expressions";
+import { extractTranscriptWithModel } from "@/lib/llm-extraction";
 import { ApiError, handle, jsonOk, readJson } from "@/lib/http";
 import { newId, requireSession } from "@/lib/session";
 
@@ -19,6 +19,7 @@ type DraftRow = {
   status: string;
   original_transcript: string;
   unresolved_issues: unknown;
+  created_at: string;
 };
 
 export async function POST(
@@ -31,7 +32,7 @@ export async function POST(
     const { issue_id: issueId, answer, session_id: sessionId } = await readJson(request, clarifySchema);
     const sql = getSql();
     const rows = (await sql`
-      select id, patient_id, revision, status, original_transcript, unresolved_issues
+      select id, patient_id, revision, status, original_transcript, unresolved_issues, created_at
       from drafts where id = ${id} and caregiver_id = ${session.caregiverId} limit 1
     `) as DraftRow[];
     const draft = rows[0];
@@ -45,7 +46,12 @@ export async function POST(
 
     const amendedTranscript = amendTranscriptForClarification(draft.original_transcript, issue, answer);
     const personalExpressions = await loadPersonalExpressions(session.caregiverId, draft.patient_id);
-    const extraction = extractTranscript(amendedTranscript, { timeZone: session.timezone, personalExpressions });
+    const extraction = await extractTranscriptWithModel(amendedTranscript, {
+      timeZone: session.timezone,
+      now: new Date(draft.created_at),
+      patientName: session.patients.find((patient) => patient.id === draft.patient_id)?.display_name,
+      personalExpressions,
+    });
     const nextIssues = extraction.unresolved_issues;
     const nextStatus = nextIssues.length ? "NEEDS_CLARIFICATION" : "REVIEWABLE";
     const revisionId = newId("rev");
@@ -73,7 +79,10 @@ export async function POST(
             observation_time_precision = ${extraction.observation_time_precision},
             observation_time_source = ${extraction.observation_time_source},
             unresolved_issues = ${JSON.stringify(nextIssues)}::jsonb,
-            clarification_log = clarification_log || ${JSON.stringify([clarificationEntry])}::jsonb,
+            clarification_log = clarification_log || ${JSON.stringify([
+              ...extraction.expression_candidates.map((candidate) => ({ resolved: true, expression_candidate: candidate })),
+              clarificationEntry,
+            ])}::jsonb,
             session_id = coalesce(${sessionId ?? null}, session_id),
             updated_at = now()
         where id = ${id} and caregiver_id = ${session.caregiverId}

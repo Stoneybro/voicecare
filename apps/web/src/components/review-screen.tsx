@@ -1,7 +1,9 @@
 "use client";
 
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
+
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, CalendarClock, CircleAlert, Check, ClipboardCheck, HeartPulse, LoaderCircle, Mic, Save } from "lucide-react";
+import { ArrowLeft, CalendarClock, CircleAlert, Check, ClipboardCheck, HeartPulse, LoaderCircle, Mic, Save, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -30,6 +32,23 @@ type Issue = {
   question: string;
   source_text: string;
   blocking: boolean;
+};
+
+type ExpressionSuggestion = {
+  suggestion_id: string;
+  phrase: string;
+  measurement_type: string;
+  unit: string | null;
+  patient_id: string;
+  patient_name: string;
+};
+
+type ExpressionCandidate = {
+  candidate_id: string;
+  phrase: string;
+  source_text: string;
+  patient_id: string;
+  patient_name: string;
 };
 
 type Draft = {
@@ -85,13 +104,19 @@ function localDateTimeInput(value: string | null): string {
 
 export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
   const [draft, setDraft] = useState<Draft | null>(null);
+  const [aiExtractionAvailable, setAiExtractionAvailable] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [clarifying, setClarifying] = useState(false);
   const [reload, setReload] = useState(0);
-  const [agentMode, setAgentMode] = useState<"clarification" | "confirmation">("clarification");
+  const [agentMode, setAgentMode] = useState<"clarification" | "confirmation" | "expression">("clarification");
+  const [activeCandidateId, setActiveCandidateId] = useState<string | undefined>();
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
   const [observations, setObservations] = useState<Observation[]>([]);
+  const [expressionSuggestions, setExpressionSuggestions] = useState<ExpressionSuggestion[]>([]);
+  const [expressionCandidates, setExpressionCandidates] = useState<ExpressionCandidate[]>([]);
+  const [candidateChoices, setCandidateChoices] = useState<Record<string, string>>({});
+  const [savingSuggestion, setSavingSuggestion] = useState<string | null>(null);
   const [observationTime, setObservationTime] = useState("");
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -107,9 +132,22 @@ export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
         if (active) {
           const loaded = payload.draft as Draft;
           setDraft(loaded);
+          setAiExtractionAvailable(payload.ai_extraction_available !== false);
           setMeasurements(loaded.measurements);
           setObservations(loaded.observations);
           setObservationTime(localDateTimeInput(loaded.observation_time));
+          let dismissedSuggestionIds: string[] = [];
+          try {
+            const dismissed = JSON.parse(sessionStorage.getItem(`voicecare-dismissed-expressions:${draftId}`) ?? "[]");
+            if (Array.isArray(dismissed)) dismissedSuggestionIds = dismissed.filter((id): id is string => typeof id === "string");
+          } catch { /* Dismissals are a convenience; storage may be unavailable. */ }
+          const dismissed = new Set(dismissedSuggestionIds);
+          setExpressionSuggestions(Array.isArray(payload.expression_suggestions)
+            ? (payload.expression_suggestions as ExpressionSuggestion[]).filter((suggestion) => !dismissed.has(suggestion.suggestion_id))
+            : []);
+          setExpressionCandidates(Array.isArray(payload.expression_candidates)
+            ? (payload.expression_candidates as ExpressionCandidate[]).filter((candidate) => !dismissed.has(candidate.candidate_id))
+            : []);
         }
       } catch (cause) {
         if (active) setError(cause instanceof Error ? cause.message : "Could not load this draft.");
@@ -126,6 +164,7 @@ export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
       <ClarificationScreen
         draftId={draftId}
         mode={agentMode}
+        candidateId={activeCandidateId}
         onBack={() => { setClarifying(false); setReload((value) => value + 1); }}
         onReview={() => { setClarifying(false); setReload((value) => value + 1); }}
       />
@@ -263,12 +302,73 @@ export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
     }
   }
 
+  async function rememberExpression(suggestion: ExpressionSuggestion): Promise<void> {
+    setSavingSuggestion(suggestion.suggestion_id);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/expressions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ draft_id: draftId, suggestion_id: suggestion.suggestion_id }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(responseError(payload));
+      setExpressionSuggestions((current) => current.filter((entry) => entry.suggestion_id !== suggestion.suggestion_id));
+      setNotice(`I’ll remember “${suggestion.phrase}” for ${suggestion.patient_name}.`);
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : "That phrase could not be remembered.");
+    } finally {
+      setSavingSuggestion(null);
+    }
+  }
+
+  function explainExpression(candidate: ExpressionCandidate): void {
+    setActiveCandidateId(candidate.candidate_id);
+    setAgentMode("expression");
+    setClarifying(true);
+  }
+
+  async function resolveExpression(candidate: ExpressionCandidate, answer: string): Promise<void> {
+    setSavingSuggestion(candidate.candidate_id);
+    setNotice(null);
+    try {
+      const response = await fetch(`/api/drafts/${encodeURIComponent(draftId)}/expressions/clarify`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ candidate_id: candidate.candidate_id, answer }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(responseError(payload));
+      if (!payload?.resolved) {
+        setNotice(typeof payload?.message === "string" ? payload.message : "Choose a measurement type from the list.");
+        return;
+      }
+      setCandidateChoices((current) => { const next = { ...current }; delete next[candidate.candidate_id]; return next; });
+      setReload((value) => value + 1);
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : "That phrase could not be clarified.");
+    } finally {
+      setSavingSuggestion(null);
+    }
+  }
+
+  function dismissExpression(suggestionId: string): void {
+    setExpressionSuggestions((current) => current.filter((entry) => entry.suggestion_id !== suggestionId));
+    setExpressionCandidates((current) => current.filter((entry) => entry.candidate_id !== suggestionId));
+    try {
+      const key = `voicecare-dismissed-expressions:${draftId}`;
+      const existing = JSON.parse(sessionStorage.getItem(key) ?? "[]");
+      const dismissed = Array.isArray(existing) ? existing.filter((id): id is string => typeof id === "string") : [];
+      sessionStorage.setItem(key, JSON.stringify([...new Set([...dismissed, suggestionId])]));
+    } catch { /* Dismissals are a convenience; storage may be unavailable. */ }
+  }
+
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-2xl flex-col px-4 pb-10 pt-5 sm:px-6">
+    <main className="care-screen mx-auto flex min-h-dvh w-full max-w-6xl flex-col px-4 pb-10 pt-5 sm:px-6 lg:px-8 xl:px-10">
       <header className="flex items-center justify-between">
         <Button variant="ghost" onClick={onBack}>
           <ArrowLeft data-icon="inline-start" aria-hidden />
-          Workspace
+          Care journal
         </Button>
         <Badge variant={needsClarification ? "outline" : confirmed ? "default" : "secondary"}>
           {needsClarification ? "Needs clarification" : confirmed ? "Confirmed" : "Ready to review"}
@@ -282,22 +382,26 @@ export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
           </span>
           <div>
             <p className="text-xs text-muted-foreground">Draft for {draft.patient_name}</p>
-            <h1 className="text-2xl font-semibold tracking-tight">Transcript review</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">Let’s get the details right</h1>
           </div>
         </div>
         <p className="mt-3 text-sm text-muted-foreground">
-          VoiceCare organized the update below. Check the extracted details before continuing.
+          Here is your update, organized. Check the details and make any changes before you confirm.
         </p>
       </section>
 
+      {!aiExtractionAvailable && (
+        <Alert className="mt-4"><CircleAlert aria-hidden /><AlertTitle>Give your note an extra check</AlertTitle><AlertDescription>Some details may need correcting. Compare the summary with your original words below.</AlertDescription></Alert>
+      )}
+
       {needsClarification && (
         <section className="mt-5" aria-labelledby="issues-heading">
-          <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
+          <div className="rounded-xl border border-warning/30 bg-warning-surface p-4">
             <h2 id="issues-heading" className="flex items-center gap-2 font-medium">
-              <CircleAlert className="size-4 text-amber-700" aria-hidden />
+              <CircleAlert className="size-4 text-warning" aria-hidden />
               Details to clarify
             </h2>
-            <ul className="mt-3 space-y-3">
+            <ul className="mt-3 flex flex-col gap-3">
               {draft.unresolved_issues.map((issue) => (
                 <li key={issue.id} className="rounded-lg bg-background/80 p-3">
                   <p className="text-sm">{issue.message}</p>
@@ -316,7 +420,62 @@ export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
         </section>
       )}
 
-      <section className="mt-5" aria-labelledby="measurements-heading">
+      {expressionCandidates.length > 0 && (
+        <section className="mt-4 flex flex-col gap-3" aria-label="Unusual phrase clarification">
+          {expressionCandidates.map((candidate) => (
+            <Card key={candidate.candidate_id} className="border-primary/30">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-sm"><Sparkles className="size-4" aria-hidden />What does “{candidate.phrase}” mean?</CardTitle>
+                <CardDescription>From your note: “{candidate.source_text}”. VoiceCare has not guessed what “{candidate.phrase}” means. You can explain it or choose a meaning below.</CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                <Button variant="outline" onClick={() => explainExpression(candidate)} disabled={savingSuggestion !== null}>
+                  <Mic data-icon="inline-start" aria-hidden />Explain by voice
+                </Button>
+                <label className="flex-1 text-xs text-muted-foreground">Or choose what it means
+                  <select
+                    aria-label={`Meaning of ${candidate.phrase}`}
+                    className="mt-1 flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    value={candidateChoices[candidate.candidate_id] ?? ""}
+                    onChange={(event) => setCandidateChoices((current) => ({ ...current, [candidate.candidate_id]: event.target.value }))}
+                    disabled={savingSuggestion !== null}
+                  >
+                    <option value="">Choose a measurement</option>
+                    {Object.entries(measurementLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                  </select>
+                </label>
+                <Button onClick={() => void resolveExpression(candidate, candidateChoices[candidate.candidate_id] ?? "")} disabled={!candidateChoices[candidate.candidate_id] || savingSuggestion !== null}>
+                  {savingSuggestion === candidate.candidate_id ? "Saving…" : "Use this meaning"}
+                </Button>
+                <Button variant="ghost" onClick={() => dismissExpression(candidate.candidate_id)} disabled={savingSuggestion !== null}>Not now</Button>
+              </CardContent>
+            </Card>
+          ))}
+        </section>
+      )}
+
+      {expressionSuggestions.length > 0 && (
+        <section className="mt-4 flex flex-col gap-3" aria-label="Unusual phrase suggestions">
+          {expressionSuggestions.map((suggestion) => (
+            <Card key={suggestion.suggestion_id} className="border-primary/30">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-sm"><Sparkles className="size-4" aria-hidden />Remember this meaning?</CardTitle>
+                <CardDescription>You said “{suggestion.phrase}” means {measurementLabels[suggestion.measurement_type] ?? suggestion.measurement_type} for {suggestion.patient_name}. Should VoiceCare remember that? This won’t change the current draft.</CardDescription>
+              </CardHeader>
+              <CardContent className="flex gap-2">
+                <Button onClick={() => void rememberExpression(suggestion)} disabled={savingSuggestion !== null}>
+                  {savingSuggestion === suggestion.suggestion_id ? "Saving…" : "Yes, remember"}
+                </Button>
+                <Button variant="outline" onClick={() => dismissExpression(suggestion.suggestion_id)} disabled={savingSuggestion !== null}>Not now</Button>
+              </CardContent>
+            </Card>
+          ))}
+        </section>
+      )}
+
+      <div className="mt-5 grid gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(20rem,0.75fr)] lg:items-start">
+      <div className="flex min-w-0 flex-col gap-6">
+      <section aria-labelledby="measurements-heading">
         <h2 id="measurements-heading" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Measurements
         </h2>
@@ -351,18 +510,19 @@ export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
         )}
       </section>
 
-      <section className="mt-6" aria-labelledby="observations-heading">
+      <section aria-labelledby="observations-heading">
         <h2 id="observations-heading" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Observations
         </h2>
         {observations.length ? (
-          <div className="mt-3 space-y-3">
+          <div className="mt-3 flex flex-col gap-3">
             {observations.map((observation, index) => (
               <Card key={`${observation.type}-${index}`}>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm">{observationLabels[observation.type] ?? observation.type}</CardTitle>
                   <CardDescription>
                     <Input aria-label={`${observationLabels[observation.type] ?? observation.type} description`} value={observation.description} disabled={!editable} onChange={(event) => setObservations((current) => current.map((item, currentIndex) => currentIndex === index ? { ...item, description: event.target.value, source_text: event.target.value } : item))} />
+                    <span className="mt-1 block text-xs text-muted-foreground">From your note: “{observation.source_text}”</span>
                   </CardDescription>
                 </CardHeader>
               </Card>
@@ -372,8 +532,10 @@ export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
           <Card className="mt-3"><CardContent className="py-5 text-sm text-muted-foreground">No separate observations were identified.</CardContent></Card>
         )}
       </section>
+      </div>
 
-      <Card className="mt-6">
+      <div className="flex min-w-0 flex-col gap-6">
+      <Card>
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-sm">
             <CalendarClock className="size-4 text-muted-foreground" aria-hidden />
@@ -393,7 +555,7 @@ export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
         </CardContent>
       </Card>
 
-      <Card className="mt-6">
+      <Card>
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-sm">
             <ClipboardCheck className="size-4 text-muted-foreground" aria-hidden />
@@ -402,10 +564,12 @@ export function ReviewScreen({ draftId, onBack, onSaved }: ReviewScreenProps) {
         </CardHeader>
         <CardContent className="whitespace-pre-wrap text-sm leading-relaxed">{draft.original_transcript}</CardContent>
       </Card>
+      </div>
+      </div>
 
       {notice && <p role="status" className="mt-4 text-center text-sm text-muted-foreground">{notice}</p>}
       {!confirmed ? (
-        <div className="mt-5 flex flex-col gap-2 sm:flex-row">
+        <div className="care-action-bar mt-5 flex flex-col gap-2 sm:flex-row">
           <Button variant="outline" onClick={() => void saveCorrections()} disabled={saving || !hasUnsavedChanges}>
             {saving ? <LoaderCircle className="animate-spin" data-icon="inline-start" aria-hidden /> : <Save data-icon="inline-start" aria-hidden />}
             Save corrections

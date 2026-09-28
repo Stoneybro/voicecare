@@ -47,15 +47,15 @@ The schema is already designed. The app shell is a blank Next.js scaffold. Every
 
 | # | What | Detail |
 |---|------|--------|
-| 3.1 | Extraction service | Server-side module: regex + rule-based NLP over transcript; no LLM needed for MVP |
-| 3.2 | Measurement parsing | Blood pressure, glucose, temperature, heart rate, SpO₂ — value, unit, confidence |
-| 3.3 | Observation parsing | Symptoms, pain, food, mood, sleep, free-text fallback |
-| 3.4 | Time parsing | "this morning", "around noon", "yesterday" → `observation_time` + `precision` |
-| 3.5 | Issue detection | Missing unit, ambiguous value, no time → populate `unresolved_issues` |
+| 3.1 | Extraction service | Server-side structured LLM extraction (GPT-5 mini by default), with deterministic parser fallback |
+| 3.2 | Measurement parsing | Blood pressure, glucose, temperature, heart rate, SpO₂ — value, unit, confidence, and transcript evidence |
+| 3.3 | Observation parsing | Extract every symptom, pain, food, mood, sleep, and other meaningful note independently of vital-sign clauses |
+| 3.4 | Time parsing | Default observation time to draft creation/recording time; only use an earlier time when supported by transcript wording, resolved in caregiver timezone |
+| 3.5 | Issue detection | Validate missing units, ambiguous values, and source evidence; never accept an unsupported model-generated date/time |
 | 3.6 | Draft PATCH | `status → NEEDS_CLARIFICATION` (issues exist) or `REVIEWABLE` (clean) |
 | 3.7 | Draft review screen | Show extracted measurements + observations as editable cards; read-only before clarification |
 
-**Exit criteria:** Speak "her blood pressure was 130 over 80 this morning" → see structured card on review screen.
+**Exit criteria:** Speak a natural, multi-clause update containing vitals and a symptom → see all source-supported details on the review screen; when no earlier observation time is stated, the observation uses recording time. Explicit earlier dates resolve relative to recording time and caregiver timezone. Uncertain units/values remain flagged rather than guessed. Original transcript is always retained for review.
 
 ---
 

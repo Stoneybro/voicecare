@@ -6,11 +6,11 @@ import { Orb, type AgentState } from "@/components/ui/orb";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
-type Props = { draftId: string; mode?: "clarification" | "confirmation"; onBack: () => void; onReview: () => void };
+type Props = { draftId: string; mode?: "clarification" | "confirmation" | "expression"; candidateId?: string; onBack: () => void; onReview: () => void };
 type VoiceConfig = { system_prompt: string; greeting: string; input: object; output: object; tools: object[] };
-type TokenPayload = { token: string; issue_id: string | null; mode: "clarification" | "confirmation"; question: string | null; session: VoiceConfig };
+type TokenPayload = { token: string; issue_id: string | null; candidate_id: string | null; mode: "clarification" | "confirmation" | "expression"; question: string | null; session: VoiceConfig };
 type ToolCall = { call_id: string; name: string; arguments: { answer?: string } };
-type Suggestion = { suggestion_id: string; phrase: string; measurement_type: string; unit: string; patient_name: string };
+type Suggestion = { suggestion_id: string; phrase: string; measurement_type: string; unit: string | null; patient_name: string };
 
 function messageFrom(payload: unknown, fallback: string): string {
   if (payload && typeof payload === "object" && "error" in payload && payload.error && typeof payload.error === "object" &&
@@ -50,11 +50,13 @@ function resampleTo24k(input: Float32Array, inputRate: number): ArrayBuffer {
   return output.buffer;
 }
 
-export function ClarificationScreen({ draftId, mode = "clarification", onBack, onReview }: Props) {
+export function ClarificationScreen({ draftId, mode = "clarification", candidateId, onBack, onReview }: Props) {
   const [state, setState] = useState<AgentState>(null);
   const [status, setStatus] = useState(mode === "confirmation"
     ? "Start when ready to hear the draft summary and confirm it by voice."
-    : "Start when you're ready. VoiceCare will ask only about details that need clarification.");
+    : mode === "expression"
+      ? "Tell VoiceCare what this unusual phrase means. It will not guess or save anything yet."
+      : "Start when you're ready. VoiceCare will ask only about details that need clarification.");
   const [error, setError] = useState<string | null>(null);
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
   const [savingSuggestion, setSavingSuggestion] = useState(false);
@@ -69,6 +71,7 @@ export function ClarificationScreen({ draftId, mode = "clarification", onBack, o
   const sessionIdRef = useRef<string | null>(null);
   const pendingToolRef = useRef<ToolCall | null>(null);
   const confirmationReplyRef = useRef(false);
+  const expressionReplyRef = useRef(false);
 
   const cleanup = useCallback((endSession: boolean) => {
     readyRef.current = false;
@@ -93,7 +96,11 @@ export function ClarificationScreen({ draftId, mode = "clarification", onBack, o
     setError(null);
     try {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("Microphone access needs a secure browser connection.");
-      const response = await fetch(`/api/agent-token?draft_id=${encodeURIComponent(draftId)}&mode=${mode}`, { cache: "no-store" });
+      const tokenUrl = new URL("/api/agent-token", window.location.origin);
+      tokenUrl.searchParams.set("draft_id", draftId);
+      tokenUrl.searchParams.set("mode", mode);
+      if (mode === "expression" && candidateId) tokenUrl.searchParams.set("candidate_id", candidateId);
+      const response = await fetch(tokenUrl, { cache: "no-store" });
       const payload = await response.json().catch(() => null) as TokenPayload | null;
       if (!response.ok || !payload?.token || !payload.session) throw new Error(messageFrom(payload, "Voice clarification could not start."));
 
@@ -148,7 +155,7 @@ export function ClarificationScreen({ draftId, mode = "clarification", onBack, o
           playbackTimeRef.current = Math.max(audioContext.currentTime, playbackTimeRef.current);
           player.start(playbackTimeRef.current);
           playbackTimeRef.current += buffer.duration;
-        } else if (message.type === "tool.call" && message.name === (mode === "confirmation" ? "confirm_draft" : "submit_clarification_answer")) {
+        } else if (message.type === "tool.call" && message.name === (mode === "confirmation" ? "confirm_draft" : mode === "expression" ? "submit_expression_meaning" : "submit_clarification_answer")) {
           pendingToolRef.current = message as unknown as ToolCall;
           readyRef.current = false;
           setStatus("Saving your answer...");
@@ -161,15 +168,20 @@ export function ClarificationScreen({ draftId, mode = "clarification", onBack, o
               const answer = typeof tool.arguments?.answer === "string" ? tool.arguments.answer : "";
               const saveResponse = await fetch(mode === "confirmation"
                 ? `/api/drafts/${encodeURIComponent(draftId)}/confirm`
-                : `/api/drafts/${encodeURIComponent(draftId)}/clarify`, {
+                : mode === "expression"
+                  ? `/api/drafts/${encodeURIComponent(draftId)}/expressions/clarify`
+                  : `/api/drafts/${encodeURIComponent(draftId)}/clarify`, {
                 method: "POST",
                 headers: { "content-type": "application/json" },
                 body: JSON.stringify(mode === "confirmation"
                   ? { method: "voice", answer, session_id: sessionIdRef.current }
-                  : { issue_id: issueIdRef.current, answer, session_id: sessionIdRef.current }),
+                  : mode === "expression"
+                    ? { candidate_id: candidateId, answer }
+                    : { issue_id: issueIdRef.current, answer, session_id: sessionIdRef.current }),
               });
               const result = await saveResponse.json().catch(() => null);
               if (!saveResponse.ok) throw new Error(messageFrom(result, "That answer could not be saved."));
+              if (mode === "expression" && result?.expression_suggestion) setSuggestion(result.expression_suggestion as Suggestion);
               if (mode === "clarification" && result?.expression_suggestion) setSuggestion(result.expression_suggestion as Suggestion);
               const nextIssueId = mode === "clarification" && typeof result.next_issue_id === "string" ? result.next_issue_id : null;
               if (nextIssueId) issueIdRef.current = nextIssueId;
@@ -178,10 +190,14 @@ export function ClarificationScreen({ draftId, mode = "clarification", onBack, o
                 call_id: tool.call_id,
                 result: JSON.stringify({
                   saved: true,
-                  resolved: result.issue_resolved,
+                  resolved: mode === "expression" ? result.resolved : result.issue_resolved,
                   next_question: result.next_question,
                   instruction: mode === "confirmation"
                     ? "The draft is confirmed. Thank the caregiver briefly, then finish the conversation."
+                    : mode === "expression"
+                      ? result.resolved
+                        ? "Thank the caregiver for explaining the phrase. Tell them to review the suggested mapping before saving it. Do not say it has been remembered."
+                        : "Thank the caregiver. Tell them they can choose the meaning from the list on the review screen. Do not suggest a meaning."
                     : nextIssueId
                       ? "If the current detail is resolved, ask the next question exactly as provided. If it remains unresolved, ask the same question again more simply."
                       : "All blocking details are resolved. Tell the caregiver they can review the update now, then do not ask anything else.",
@@ -191,6 +207,9 @@ export function ClarificationScreen({ draftId, mode = "clarification", onBack, o
               if (mode === "confirmation") {
                 confirmationReplyRef.current = true;
                 setStatus("Confirmation saved. Wrapping up...");
+              } else if (mode === "expression") {
+                expressionReplyRef.current = true;
+                setStatus(result.resolved ? "Explanation received. Review the suggested mapping before saving." : "You can choose the meaning from the list on the review screen.");
               } else {
                 setStatus(nextIssueId ? "Answer saved. Continuing with the next detail." : "All blocking details are clear. You can review the update.");
               }
@@ -206,6 +225,10 @@ export function ClarificationScreen({ draftId, mode = "clarification", onBack, o
           })();
         } else if (message.type === "reply.done" && confirmationReplyRef.current && !pendingToolRef.current) {
           confirmationReplyRef.current = false;
+          cleanup(true);
+          onReview();
+        } else if (message.type === "reply.done" && expressionReplyRef.current && !pendingToolRef.current) {
+          expressionReplyRef.current = false;
           cleanup(true);
           onReview();
         } else if (message.type === "session.error" || message.type === "error") {
@@ -233,7 +256,7 @@ export function ClarificationScreen({ draftId, mode = "clarification", onBack, o
     } finally {
       setBusy(false);
     }
-  }, [cleanup, draftId, mode, onReview]);
+  }, [candidateId, cleanup, draftId, mode, onReview]);
 
   function finish(): void {
     cleanup(true);
@@ -261,11 +284,11 @@ export function ClarificationScreen({ draftId, mode = "clarification", onBack, o
   }
 
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-lg flex-col px-4 pb-8 pt-5 sm:px-6">
+    <main className="care-screen mx-auto flex min-h-dvh w-full max-w-lg flex-col px-4 pb-8 pt-5 sm:px-6">
       <header><Button variant="ghost" onClick={() => { cleanup(true); onBack(); }}><ArrowLeft data-icon="inline-start" aria-hidden />Back to review</Button></header>
       <section className="mt-8 flex flex-col items-center text-center">
-        <div className="relative size-48"><Orb className="absolute inset-0" colors={["#64c8b8", "#a7e2d8"]} agentState={state} /></div>
-        <h1 className="mt-5 text-2xl font-semibold">{mode === "confirmation" ? "Confirm by voice" : "Quick clarification"}</h1>
+        <div className="relative size-48"><Orb className="absolute inset-0" colors={["#7c9463", "#c3cea8"]} agentState={state} /></div>
+        <h1 className="mt-5 text-2xl font-semibold">{mode === "confirmation" ? "Confirm by voice" : mode === "expression" ? "Explain a phrase" : "A little more detail"}</h1>
         <p className="mt-2 max-w-sm text-sm text-muted-foreground">{status}</p>
       </section>
       {error && <Card className="mt-6 border-destructive/40"><CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-sm"><CircleAlert className="size-4" aria-hidden />Voice session issue</CardTitle><CardDescription>{error}</CardDescription></CardHeader></Card>}
@@ -274,12 +297,12 @@ export function ClarificationScreen({ draftId, mode = "clarification", onBack, o
         {!state ? (
           <Button size="lg" onClick={() => void start()} disabled={busy}>
             {busy ? <LoaderCircle className="animate-spin" data-icon="inline-start" aria-hidden /> : <Mic data-icon="inline-start" aria-hidden />}
-            {busy ? "Starting..." : mode === "confirmation" ? "Hear the summary" : "Start voice clarification"}
+            {busy ? "Starting..." : mode === "confirmation" ? "Hear the summary" : mode === "expression" ? "Explain by voice" : "Start voice clarification"}
           </Button>
         ) : (
           <Button size="lg" variant="outline" onClick={finish}><MicOff data-icon="inline-start" aria-hidden />Finish and review</Button>
         )}
-        <p className="text-center text-xs text-muted-foreground">{mode === "confirmation" ? "Only a clear yes confirms. Say no to return and make corrections." : "You can stop at any time; unanswered details will stay flagged in your review."}</p>
+        <p className="text-center text-xs text-muted-foreground">{mode === "confirmation" ? "Only a clear yes confirms. Say no to return and make corrections." : mode === "expression" ? "This explanation will only create a suggestion. VoiceCare will ask before remembering it." : "You can stop at any time; unanswered details will stay flagged in your review."}</p>
       </CardContent></Card>
     </main>
   );

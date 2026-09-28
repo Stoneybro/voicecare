@@ -23,6 +23,7 @@ No schema migration was needed: the existing `personal_expressions` table alread
 | `npm.cmd run typecheck` from `apps/web` | Passed |
 | `npm.cmd run lint` from `apps/web` | Passed |
 | `git diff --check` | Passed (Git printed line-ending normalization warnings only) |
+| Runtime check of heart-rate and temperature suggestion detection | Passed |
 | Automated unit tests | None are configured in this app |
 | Live database / end-to-end browser test | Not yet exercised |
 

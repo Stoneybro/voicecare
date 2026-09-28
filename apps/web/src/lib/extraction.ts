@@ -30,6 +30,11 @@ export type UnresolvedIssue = {
 export type ExtractionResult = {
   measurements: ExtractedMeasurement[];
   observations: ExtractedObservation[];
+  expression_candidates: Array<{
+    candidate_id: string;
+    phrase: string;
+    source_text: string;
+  }>;
   observation_time: string | null;
   observation_time_precision: TimePrecision;
   observation_time_source: string | null;
@@ -89,15 +94,18 @@ function parseClockTime(transcript: string): { hour: number; minute: number; pre
   return null;
 }
 
-function localParts(date: Date, timeZone: string): { year: number; month: number; day: number } {
+function localParts(date: Date, timeZone: string): { year: number; month: number; day: number; hour: number; minute: number } {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone,
     year: "numeric",
     month: "numeric",
     day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    hourCycle: "h23",
   }).formatToParts(date);
   const value = (name: string) => Number(parts.find((part) => part.type === name)?.value);
-  return { year: value("year"), month: value("month"), day: value("day") };
+  return { year: value("year"), month: value("month"), day: value("day"), hour: value("hour"), minute: value("minute") };
 }
 
 function zonedDateTimeToUtc(
@@ -129,16 +137,22 @@ function zonedDateTimeToUtc(
 
 function extractTime(transcript: string, timeZone: string, now: Date) {
   const today = localParts(now, timeZone);
-  const yesterday = /\byesterday\b/i.test(transcript);
+  const dayCountMatch = /\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+days?\s+ago\b/i.exec(transcript);
+  const wordDays: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+  const daysAgo = dayCountMatch
+    ? Number(dayCountMatch[1]) || wordDays[dayCountMatch[1].toLowerCase()] || 0
+    : /\byesterday\b/i.test(transcript) ? 1 : 0;
+  const yesterday = daysAgo === 1;
   let date = today;
-  if (yesterday) {
-    const prior = new Date(Date.UTC(today.year, today.month - 1, today.day - 1));
-    date = { year: prior.getUTCFullYear(), month: prior.getUTCMonth() + 1, day: prior.getUTCDate() };
+  if (daysAgo > 0) {
+    const prior = new Date(Date.UTC(today.year, today.month - 1, today.day - daysAgo));
+    date = { year: prior.getUTCFullYear(), month: prior.getUTCMonth() + 1, day: prior.getUTCDate(), hour: today.hour, minute: today.minute };
   }
 
   const clock = parseClockTime(transcript);
   if (clock) {
-    const source = yesterday ? `yesterday ${clock.source}` : clock.source;
+    const dateSource = dayCountMatch?.[0] ?? (yesterday ? "yesterday" : "");
+    const source = [dateSource, clock.source].filter(Boolean).join(" ");
     return {
       observation_time: zonedDateTimeToUtc(date.year, date.month, date.day, clock.hour, clock.minute, timeZone).toISOString(),
       observation_time_precision: clock.precision,
@@ -152,7 +166,8 @@ function extractTime(transcript: string, timeZone: string, now: Date) {
     const hour = normalized === "morning" ? 9 : normalized === "afternoon" ? 15 : 19;
     const precision: TimePrecision = normalized === "morning" ? "morning" : normalized === "afternoon" ? "afternoon" : "evening";
     const prefix = /\b(?:this|today|in the)\s*$/i.exec(transcript.slice(0, period.index))?.[0].trim();
-    const source = `${yesterday ? "yesterday " : prefix ? `${prefix} ` : ""}${period[0].toLowerCase()}`;
+    const dateSource = dayCountMatch?.[0] ?? (yesterday ? "yesterday" : "");
+    const source = `${dateSource ? `${dateSource} ` : prefix ? `${prefix} ` : ""}${period[0].toLowerCase()}`;
     return {
       observation_time: zonedDateTimeToUtc(date.year, date.month, date.day, hour, 0, timeZone).toISOString(),
       observation_time_precision: precision,
@@ -161,7 +176,8 @@ function extractTime(transcript: string, timeZone: string, now: Date) {
   }
 
   if (/\b(?:around|about)\s+noon\b|\bnoon\b/i.test(transcript)) {
-    const source = `${yesterday ? "yesterday " : ""}around noon`;
+    const dateSource = dayCountMatch?.[0] ?? (yesterday ? "yesterday" : "");
+    const source = `${dateSource ? `${dateSource} ` : ""}around noon`;
     return {
       observation_time: zonedDateTimeToUtc(date.year, date.month, date.day, 12, 0, timeZone).toISOString(),
       observation_time_precision: "period" as const,
@@ -171,16 +187,24 @@ function extractTime(transcript: string, timeZone: string, now: Date) {
 
   if (yesterday) {
     return {
-      observation_time: zonedDateTimeToUtc(date.year, date.month, date.day, 12, 0, timeZone).toISOString(),
+      observation_time: zonedDateTimeToUtc(date.year, date.month, date.day, today.hour, today.minute, timeZone).toISOString(),
       observation_time_precision: "day" as const,
       observation_time_source: "yesterday",
+    };
+  }
+
+  if (dayCountMatch) {
+    return {
+      observation_time: zonedDateTimeToUtc(date.year, date.month, date.day, today.hour, today.minute, timeZone).toISOString(),
+      observation_time_precision: "day" as const,
+      observation_time_source: dayCountMatch[0],
     };
   }
 
   const todayMention = /\btoday\b/i.exec(transcript);
   if (todayMention) {
     return {
-      observation_time: zonedDateTimeToUtc(date.year, date.month, date.day, 12, 0, timeZone).toISOString(),
+      observation_time: zonedDateTimeToUtc(date.year, date.month, date.day, today.hour, today.minute, timeZone).toISOString(),
       observation_time_precision: "day" as const,
       observation_time_source: todayMention[0],
     };
@@ -337,6 +361,7 @@ export function extractTranscript(
   return {
     measurements: restorePersonalExpressionSources(measurements, expressions),
     observations: restorePersonalExpressionSources(observations, expressions),
+    expression_candidates: [],
     ...time,
     unresolved_issues: restorePersonalExpressionSources(unresolved_issues, expressions),
   };

@@ -9,17 +9,18 @@ import { toast } from "sonner";
 import {
   CalendarClock,
   Brain,
-  HeartPulse,
+  Check,
   Mic,
   Plus,
   RotateCcw,
   TriangleAlert,
 } from "lucide-react";
-import { cn } from "cn";
 import type { BootstrapPayload } from "@/lib/bootstrap";
+import { CareBrand } from "@/components/care-identity";
 import { Orb } from "@/components/ui/orb";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
+import { Field, FieldLabel } from "@/components/ui/field";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -30,7 +31,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RecordingScreen } from "@/components/recording-screen";
 import { ReviewScreen } from "@/components/review-screen";
@@ -194,7 +194,7 @@ export default function HomeScreen() {
           <Skeleton className="h-10 w-56" />
           <Skeleton className="h-4 w-72" />
         </div>
-        <div className="mt-10 space-y-3">
+        <div className="mt-10 flex flex-col gap-3">
           <Skeleton className="h-16 w-full rounded-xl" />
           <Skeleton className="h-28 w-full rounded-xl" />
         </div>
@@ -238,113 +238,54 @@ export default function HomeScreen() {
 
   // __SPLIT_2__
   return (
-    <main className="mx-auto flex w-full max-w-md flex-1 flex-col px-4 pt-6 pb-10">
-      <header className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <HeartPulse className="size-4" aria-hidden />
-          </span>
-          <span className="text-sm font-semibold tracking-tight">VoiceCare</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <Button variant="ghost" size="sm" onClick={() => setExpressionsOpen(true)}>
-            <Brain data-icon="inline-start" aria-hidden />
-            Remembered phrases
+    <main className="care-home">
+      <header className="care-home-header">
+        <CareBrand />
+        <nav className="flex flex-wrap items-center gap-1" aria-label="Workspace tools">
+          <Button variant="outline" onClick={() => setExpressionsOpen(true)}>
+            <Brain data-icon="inline-start" aria-hidden />Remembered phrases
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => void handleResetDemo()} disabled={isResetting}>
-            <RotateCcw data-icon="inline-start" aria-hidden />
-            Reset demo
-          </Button>
-        </div>
+
+        </nav>
       </header>
 
-      {/* Hero: one message, one primary action (spec/01 MVP bar). */}
-      <section className="mt-8 flex flex-col items-center text-center">
-        <div className="relative size-44">
-          <Orb className="absolute inset-0" colors={["#64c8b8", "#a7e2d8"]} agentState={null} />
-          <span
-            aria-hidden
-            className="voice-pulse pointer-events-none absolute inset-0 rounded-full"
-          />
-        </div>
-        <h1 className="mt-5 text-2xl font-semibold tracking-tight">
-          {selectedPatient
-            ? `How is ${selectedPatient.display_name} doing today?`
-            : "Who are you caring for today?"}
-        </h1>
-        <p className="mt-2 max-w-72 text-sm text-muted-foreground">
-          Speak naturally, like a voice note to yourself. VoiceCare turns it into a clear note
-          for the doctor.
-        </p>
-        <Button
-          size="lg"
-          className="voice-pulse mt-5 h-11 rounded-full px-6 text-base"
-          onClick={() => selectedPatient && setRecordingPatientId(selectedPatient.id)}
-          disabled={!selectedPatient}
-        >
-          <Mic data-icon="inline-start" aria-hidden />
-          Speak about {selectedPatient?.display_name ?? "your loved one"}
-        </Button>
-        <p className="mt-3 text-xs text-muted-foreground">
-          Demo only — fictional patients, no real medical advice.
-        </p>
-      </section>
-      {/* Patient switcher (1.5) + add patient (1.6). */}
-      <section className="mt-10">
-        <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-          Who is this note about?
-        </h2>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          {data.patients.map((patient) => {
-            const selected = patient.id === selectedPatientId;
-            return (
-              <button
-                key={patient.id}
-                type="button"
-                onClick={() => setSelectedPatientId(patient.id)}
-                aria-pressed={selected}
-                className={cn(
-                  "flex items-center gap-2 rounded-full border py-1 pr-3 pl-1 text-sm transition-colors",
-                  selected
-                    ? "border-primary bg-primary text-primary-foreground"
-                    : "border-border bg-card hover:bg-muted",
-                )}
-              >
-                <Avatar className={cn("size-6", selected && "bg-primary-foreground/20")}>
-                  <AvatarFallback className="text-[0.65rem]">
-                    {initialsOf(patient.display_name)}
-                  </AvatarFallback>
-                </Avatar>
-                {patient.display_name}
-              </button>
-            );
-          })}
-          <Button
-            variant="outline"
-            size="sm"
-            className="rounded-full"
-            onClick={() => setAddDialogOpen(true)}
-          >
-            <Plus data-icon="inline-start" aria-hidden />
-            Add person
-          </Button>
+      <section className="care-patient-bar" aria-labelledby="patient-heading">
+        <h2 id="patient-heading" className="text-sm font-medium">Who is this note about?</h2>
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
+          <div className="flex flex-wrap gap-2" role="group" aria-label="Choose a patient">
+            {data.patients.map((patient) => (
+              <Button key={patient.id} variant={patient.id === selectedPatientId ? "default" : "outline"} className="h-auto min-h-11 max-w-full gap-2 whitespace-normal rounded-full py-2" onClick={() => setSelectedPatientId(patient.id)} aria-pressed={patient.id === selectedPatientId}>
+                <Avatar className="size-7"><AvatarFallback>{initialsOf(patient.display_name)}</AvatarFallback></Avatar>
+                <span>{patient.display_name}</span>
+                {patient.id === selectedPatientId && <Check data-icon="inline-end" aria-hidden />}
+              </Button>
+            ))}
+          </div>
+          <Button variant="outline" onClick={() => setAddDialogOpen(true)}><Plus data-icon="inline-start" aria-hidden />Add person</Button>
         </div>
       </section>
 
-      {/* Stage 6: saved reports are scoped to the selected patient. */}
-      <section className="mt-8">
-        <div className="flex items-center justify-between">
-          <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-            History
-          </h2>
-          <Badge variant="secondary">{data.reports_count} saved</Badge>
-        </div>
-        <ReportHistory patientId={selectedPatient?.id ?? null} onSelect={setReportDetailId} />
-        <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
-          <CalendarClock className="size-3.5" aria-hidden />
-          Demo session expires {new Date(data.session.expires_at).toLocaleString()}
-        </p>
-      </section>
+      <div className="care-home-grid">
+        <section className="care-capture" aria-labelledby="capture-heading">
+          <div className="relative size-40 sm:size-44"><Orb className="absolute inset-0" colors={["#7c9463", "#c3cea8"]} agentState={null} /></div>
+          <h1 id="capture-heading">{selectedPatient ? <>How is {selectedPatient.display_name}<br />doing today?</> : "Who are you caring for today?"}</h1>
+          <p>How they slept. What they ate. A reading you took. Start with whatever is on your mind.</p>
+          <Button size="lg" className="mt-6 max-w-full h-auto min-h-12 whitespace-normal" onClick={() => selectedPatient && setRecordingPatientId(selectedPatient.id)} disabled={!selectedPatient}>
+            <Mic data-icon="inline-start" aria-hidden />Speak about {selectedPatient?.display_name ?? "your loved one"}
+          </Button>
+          <div className="care-capture-foot"><span className="care-small-dot" />Speak naturally. Review before you save.</div>
+        </section>
+
+        <section className="care-journal" aria-labelledby="history-heading">
+          <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="history-heading">Saved reports</h2><Badge variant="secondary">{data.reports_count} saved in workspace</Badge></div>
+          <p className="mt-2 text-sm text-muted-foreground">{selectedPatient ? `Showing updates for ${selectedPatient.display_name}` : "Choose a person to see their updates"}</p>
+          <ReportHistory patientId={selectedPatient?.id ?? null} onSelect={setReportDetailId} />
+        </section>
+      </div>
+
+      <footer className="care-home-footer"><span>Hackathon demo · Fictional information only · Not medical advice</span><span className="flex items-center gap-2"><CalendarClock className="size-3.5" aria-hidden />Session ends {new Date(data.session.expires_at).toLocaleString()}</span>          <Button variant="ghost" size="sm" onClick={() => void handleResetDemo()} disabled={isResetting}>
+            <RotateCcw data-icon="inline-start" aria-hidden />{isResetting ? "Resetting..." : "Reset demo"}
+          </Button></footer>
 
       <Dialog
         open={addDialogOpen}
@@ -360,8 +301,8 @@ export default function HomeScreen() {
               A first name is enough for the demo. You can always add more later.
             </DialogDescription>
           </DialogHeader>
-          <div className="grid gap-2">
-            <Label htmlFor="new-patient-name">Name</Label>
+          <Field>
+            <FieldLabel htmlFor="new-patient-name">Name</FieldLabel>
             <Input
               id="new-patient-name"
               value={newPatientName}
@@ -373,7 +314,7 @@ export default function HomeScreen() {
                 if (event.key === "Enter") void handleAddPatient();
               }}
             />
-          </div>
+          </Field>
           <DialogFooter>
             <Button
               onClick={() => void handleAddPatient()}

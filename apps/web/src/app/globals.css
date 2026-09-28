@@ -11,6 +11,8 @@
   --font-mono: var(--font-geist-mono);
   --font-heading: var(--font-sans);
   --color-ring: var(--ring);
+  --color-warning: var(--warning);
+  --color-warning-surface: var(--warning-surface);
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
@@ -35,74 +37,51 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-/* base-nova neutral scale, lightly tinted toward a calm teal (care/health mood). */
 :root {
-  --background: oklch(0.985 0.006 175);
-  --foreground: oklch(0.21 0.02 175);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.21 0.02 175);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.21 0.02 175);
-  --primary: oklch(0.46 0.07 175);
-  --primary-foreground: oklch(0.985 0.005 175);
-  --secondary: oklch(0.96 0.01 175);
-  --secondary-foreground: oklch(0.28 0.02 175);
-  --muted: oklch(0.962 0.008 175);
-  --muted-foreground: oklch(0.5 0.02 175);
-  --accent: oklch(0.945 0.02 168);
-  --accent-foreground: oklch(0.3 0.03 175);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.905 0.012 175);
-  --input: oklch(0.905 0.012 175);
-  --ring: oklch(0.55 0.06 175);
-  --chart-1: oklch(0.55 0.09 175);
-  --chart-2: oklch(0.65 0.11 150);
-  --chart-3: oklch(0.7 0.12 120);
-  --chart-4: oklch(0.75 0.1 65);
-  --chart-5: oklch(0.65 0.15 25);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0.006 175);
-  --sidebar-foreground: oklch(0.21 0.02 175);
-  --sidebar-primary: oklch(0.46 0.07 175);
-  --sidebar-primary-foreground: oklch(0.985 0.005 175);
-  --sidebar-accent: oklch(0.945 0.02 168);
-  --sidebar-accent-foreground: oklch(0.3 0.03 175);
-  --sidebar-border: oklch(0.905 0.012 175);
-  --sidebar-ring: oklch(0.55 0.06 175);
+  --background: #f6f5ef;
+  --foreground: #30382e;
+  --card: #fffefa;
+  --card-foreground: #30382e;
+  --popover: #fffefa;
+  --popover-foreground: #30382e;
+  --primary: #414f35;
+  --primary-foreground: #fffefa;
+  --secondary: #e9ecdf;
+  --secondary-foreground: #414f35;
+  --muted: #eeeee6;
+  --muted-foreground: #707468;
+  --accent: #e7eadc;
+  --accent-foreground: #35442b;
+  --destructive: #a33e30;
+  --border: #dcded2;
+  --input: #ced2c3;
+  --ring: #7a886a;
+  --radius: 0.875rem;
+  --warning: #886027;
+  --warning-surface: #f6efdf;
 }
 
 .dark {
-  --background: oklch(0.17 0.015 175);
-  --foreground: oklch(0.97 0.005 175);
-  --card: oklch(0.21 0.02 175);
-  --card-foreground: oklch(0.97 0.005 175);
-  --popover: oklch(0.21 0.02 175);
-  --popover-foreground: oklch(0.97 0.005 175);
-  --primary: oklch(0.8 0.08 170);
-  --primary-foreground: oklch(0.2 0.02 175);
-  --secondary: oklch(0.27 0.02 175);
-  --secondary-foreground: oklch(0.97 0.005 175);
-  --muted: oklch(0.26 0.02 175);
-  --muted-foreground: oklch(0.7 0.015 175);
-  --accent: oklch(0.3 0.025 170);
-  --accent-foreground: oklch(0.95 0.01 170);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.6 0.06 175);
-  --chart-1: oklch(0.65 0.1 175);
-  --chart-2: oklch(0.7 0.12 150);
-  --chart-3: oklch(0.75 0.13 120);
-  --chart-4: oklch(0.8 0.1 65);
-  --chart-5: oklch(0.7 0.15 25);
-  --sidebar: oklch(0.21 0.02 175);
-  --sidebar-foreground: oklch(0.97 0.005 175);
-  --sidebar-primary: oklch(0.8 0.08 170);
-  --sidebar-primary-foreground: oklch(0.2 0.02 175);
-  --sidebar-accent: oklch(0.3 0.025 170);
-  --sidebar-accent-foreground: oklch(0.95 0.01 170);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.6 0.06 175);
+  --background: #20251e;
+  --foreground: #eeeee5;
+  --card: #292f26;
+  --card-foreground: #eeeee5;
+  --popover: #292f26;
+  --popover-foreground: #eeeee5;
+  --primary: #c3ceac;
+  --primary-foreground: #252e1e;
+  --secondary: #363e30;
+  --secondary-foreground: #e2e8d8;
+  --muted: #30372c;
+  --muted-foreground: #b1b7a7;
+  --accent: #3b4533;
+  --accent-foreground: #e2e8d8;
+  --destructive: #ed9c8f;
+  --border: #444d3d;
+  --input: #515d49;
+  --ring: #a1b189;
+  --warning: #e2bf89;
+  --warning-surface: #3e3526;
 }
 
 @layer base {
@@ -117,12 +96,48 @@
   }
 }
 
-/* VoiceCare: a very soft, calm wash behind the whole app. */
-body {
-  background:
-    radial-gradient(circle at 8% 0%, color-mix(in oklch, var(--accent) 45%, transparent), transparent 26rem),
-    radial-gradient(circle at 94% 6%, color-mix(in oklch, var(--secondary) 60%, transparent), transparent 24rem),
-    var(--background);
+body { background: var(--background); }
+
+h1, h2, p { overflow-wrap: anywhere; }
+
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 4px; }
+
+.care-brand { display: flex; align-items: center; gap: 12px; font-size: 21px; font-weight: 600; letter-spacing: -0.7px; }
+.care-brand-mark { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 14px; color: var(--primary-foreground); background: var(--primary); }
+.care-brand-mark svg { width: 23px; height: 23px; }
+.eyebrow { font-size: 10px; font-weight: 600; letter-spacing: 0.16em; line-height: 1.6; color: var(--muted-foreground); }
+.care-home { width: 100%; max-width: 1200px; margin: 0 auto; padding: 28px 40px 24px; }
+.care-home-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding-bottom: 24px; border-bottom: 1px solid var(--border); }
+.care-patient-bar { display: flex; align-items: center; gap: 36px; padding: 20px 0; border-bottom: 1px solid var(--border); }
+.care-patient-bar > h2 { flex-shrink: 0; }
+.care-patient-bar > div:first-child p + p { margin-top: 4px; font-size: 12px; }
+.care-home-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; padding: 30px 0; align-items: start; }
+.care-capture { position: relative; overflow: hidden; display: flex; flex-direction: column; align-items: center; text-align: center; min-height: 365px; padding: 30px; border: 1px solid var(--border); border-radius: 22px; background: var(--secondary); }
+.care-capture h1 { margin-top: 16px; font-family: Georgia, 'Times New Roman', serif; font-weight: 400; font-size: clamp(30px, 3vw, 40px); line-height: 1.15; letter-spacing: -1px; }
+.care-capture > p { margin-top: 16px; max-width: 330px; color: var(--muted-foreground); font-size: 13px; line-height: 1.75; }
+.care-capture-foot { display: flex; align-items: center; gap: 8px; margin-top: 24px; font-size: 11px; color: var(--muted-foreground); }
+.care-small-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--primary); }
+.care-journal { min-width: 0; padding-top: 6px; }
+.care-journal h2 { margin-top: 6px; font-family: Georgia, 'Times New Roman', serif; font-size: 27px; letter-spacing: -0.7px; }
+.care-home-footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 24px; font-size: 10px; color: var(--muted-foreground); }
+.care-screen { padding-top: 28px; }
+.care-screen > header { padding-bottom: 18px; border-bottom: 1px solid var(--border); }
+.care-screen h1 { font-family: Georgia, 'Times New Roman', serif; font-size: clamp(30px, 4vw, 42px); font-weight: 400; line-height: 1.16; letter-spacing: -1px; }
+.care-screen > section:first-of-type { margin-top: 32px; }
+.care-screen details { padding: 18px 20px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }
+.care-report #print-summary { padding: 32px; background: var(--card); border: 1px solid var(--border); border-radius: 20px; }
+.care-recording > header { max-width: 1120px; }
+.care-action-bar { position: sticky; bottom: 16px; padding: 16px; border: 1px solid var(--border); border-radius: 16px; background: var(--card); box-shadow: 0 8px 24px color-mix(in oklch, var(--foreground) 8%, transparent); }
+
+@media (max-width: 767px) {
+  .care-home { padding: 20px; }
+  .care-home-header { align-items: flex-start; flex-wrap: wrap; gap: 16px; padding-bottom: 18px; }
+  .care-home-header nav { max-width: 100%; }
+  .care-patient-bar { align-items: flex-start; flex-direction: column; gap: 16px; }
+  .care-home-grid { grid-template-columns: 1fr; gap: 28px; padding: 24px 0; }
+  .care-capture { padding: 24px; min-height: 340px; }
+  .care-report #print-summary { padding: 20px; }
+  .care-action-bar { bottom: 8px; }
 }
 
 button:not(:disabled) {
@@ -186,5 +201,7 @@ button:not(:disabled) {
     position: absolute;
     inset: 0;
     padding: 16px;
+    border: 0 !important;
+    box-shadow: none;
   }
 }

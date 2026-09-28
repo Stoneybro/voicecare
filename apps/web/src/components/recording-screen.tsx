@@ -370,8 +370,8 @@ export function RecordingScreen({ patientId, patientName, onCancel, onSaved }: R
   const displayedTranscript = mode === "fallback" ? typedTranscript : transcript;
 
   return (
-    <main className="fixed inset-0 z-50 flex min-h-dvh flex-col overflow-y-auto bg-background">
-      <header className="mx-auto flex w-full max-w-3xl items-center justify-between px-4 py-4 sm:px-6">
+    <main className="care-screen care-recording flex min-h-dvh flex-col bg-background">
+      <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
         <Button variant="ghost" onClick={() => void cancelRecording()} disabled={mode === "saving"}>
           <ArrowLeft data-icon="inline-start" aria-hidden />
           Cancel
@@ -387,15 +387,9 @@ export function RecordingScreen({ patientId, patientName, onCancel, onSaved }: R
         </span>
       </header>
 
-      <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 pb-8 sm:px-6">
-        <section className="flex flex-col items-center pt-3 text-center sm:pt-8">
-          <div className="relative size-40 sm:size-48">
-            <Orb
-              className="absolute inset-0"
-              colors={["#64c8b8", "#a7e2d8"]}
-              agentState={mode === "live" ? "listening" : mode === "connecting" ? "thinking" : null}
-            />
-          </div>
+      <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col px-4 pb-8 sm:px-6 lg:grid lg:grid-cols-[minmax(20rem,0.8fr)_minmax(0,1.2fr)] lg:content-start lg:gap-x-10 lg:gap-y-5 lg:px-8 lg:pt-5">
+        <section className="flex flex-col items-center pt-3 text-center sm:pt-8 lg:self-center lg:justify-self-center lg:pt-10">
+          <div className="relative size-40 sm:size-48"><Orb className="absolute inset-0" colors={["#7c9463", "#c3cea8"]} agentState={mode === "live" ? "listening" : mode === "connecting" ? "thinking" : null} /></div>
           <h1 className="mt-2 text-2xl font-semibold tracking-tight">
             {mode === "live" ? "I’m listening" : mode === "fallback" ? "Your note, your words" : "Let’s capture an update"}
           </h1>
@@ -440,14 +434,15 @@ export function RecordingScreen({ patientId, patientName, onCancel, onSaved }: R
           )}
         </section>
 
-        <Card className="mt-5 flex min-h-48 flex-1 flex-col sm:mt-7">
+        <div className="flex min-w-0 flex-1 flex-col lg:min-h-[min(68vh,44rem)]">
+        <Card className="mt-5 flex min-h-48 flex-1 flex-col sm:mt-7 lg:mt-0">
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-sm">
               {mode === "fallback" ? <Type className="size-4 text-primary" aria-hidden /> : <Radio className="size-4 text-primary" aria-hidden />}
               {mode === "fallback" ? "Type your update" : "Live transcript"}
             </CardTitle>
             <CardDescription>
-              {mode === "fallback" ? "Your text is saved as the original transcript for this draft." : "Your words appear here as they are recognized. You can correct them in the next step."}
+              {mode === "fallback" ? "Write it as you would say it. You can check the details next." : "Your words, as you say them. There is time to review everything next."}
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-1 flex-col pb-4">
@@ -470,7 +465,7 @@ export function RecordingScreen({ patientId, patientName, onCancel, onSaved }: R
                     displayedTranscript
                   ) : (
                   <p className="text-muted-foreground">
-                    {mode === "live" ? "I’ll show each phrase here as you speak…" : mode === "connecting" ? "Your live transcript will appear here." : "Start a recording or choose text entry."}
+                    {mode === "live" ? "I’ll show each phrase here as you speak…" : mode === "connecting" ? "Your live transcript will appear here." : "Start with how they are feeling, a measurement, or something you noticed today."}
                   </p>
                 )}
               </div>
@@ -499,10 +494,11 @@ export function RecordingScreen({ patientId, patientName, onCancel, onSaved }: R
             disabled={mode === "ready" || mode === "connecting" || mode === "saving"}
           >
             {mode === "saving" ? <LoaderCircle data-icon="inline-start" className="animate-spin" aria-hidden /> : mode === "fallback" ? <Check data-icon="inline-start" aria-hidden /> : <MicOff data-icon="inline-start" aria-hidden />}
-            {mode === "saving" ? "Saving draft…" : mode === "fallback" ? "Done · save draft" : "Done"}
+            {mode === "saving" ? "Saving draft…" : mode === "fallback" ? "Done · save draft" : "Finish & review"}
           </Button>
         </div>
         <p className="mt-3 text-center text-xs text-muted-foreground">Fictional demo information only. This is not medical advice.</p>
+        </div>
       </div>
     </main>
   );

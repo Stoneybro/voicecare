@@ -1,10 +1,12 @@
 "use client";
 
+import { Empty, EmptyHeader, EmptyMedia, EmptyTitle, EmptyDescription } from "@/components/ui/empty";
+
 import { useEffect, useState } from "react";
 import { ArrowLeft, Download, FileText, LoaderCircle, Printer } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 type ReportSummary = {
   id: string;
@@ -170,16 +172,11 @@ export function ReportHistory({ patientId, onSelect }: { patientId: string | nul
   if (loading) return <Card className="mt-3"><CardContent className="flex items-center gap-2 py-5 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" aria-hidden />Loading saved reports...</CardContent></Card>;
   if (error) return <Card className="mt-3"><CardContent className="py-5 text-sm text-destructive">{error}</CardContent></Card>;
   if (!reports.length) return (
-    <Card className="mt-3">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-sm"><FileText className="size-4" aria-hidden />No saved reports yet</CardTitle>
-        <CardDescription>Confirmed reports for this person will appear here, newest first.</CardDescription>
-      </CardHeader>
-    </Card>
+    <Empty className="mt-5 min-h-64 border"><EmptyHeader><EmptyMedia variant="icon"><FileText aria-hidden /></EmptyMedia><EmptyTitle>Their story starts with a note.</EmptyTitle><EmptyDescription>Create your first care note. Once you review and save it, you can find it here whenever you need it.</EmptyDescription></EmptyHeader></Empty>
   );
-  return <div className="mt-3 space-y-2">
+  return <div className="mt-3 flex flex-col gap-2">
     {reports.map((report) => (
-      <button type="button" key={report.id} onClick={() => onSelect(report.id)} className="w-full text-left">
+      <button type="button" key={report.id} onClick={() => onSelect(report.id)} className="w-full rounded-xl text-left outline-offset-4">
         <Card className="transition-colors hover:bg-muted/50">
           <CardContent className="flex items-center justify-between gap-3 p-4">
             <div>
@@ -228,7 +225,7 @@ export function ReportDetailScreen({ reportId, onBack }: { reportId: string; onB
     observations: report.observations,
   };
   return (
-    <main className="mx-auto w-full max-w-3xl px-4 pb-10 pt-5 sm:px-6">
+    <main className="care-screen care-report mx-auto w-full max-w-4xl px-4 pb-10 pt-5 sm:px-6">
       <header className="flex flex-wrap items-center justify-between gap-2 print:hidden">
         <Button variant="ghost" onClick={onBack}><ArrowLeft data-icon="inline-start" aria-hidden />History</Button>
         <div className="flex flex-wrap gap-2">
@@ -240,7 +237,7 @@ export function ReportDetailScreen({ reportId, onBack }: { reportId: string; onB
         </div>
       </header>
 
-      <article id="print-summary" className="mt-5 space-y-5">
+      <article id="print-summary" className="mt-5 flex flex-col gap-5">
         <section>
           <Badge variant="secondary">Confirmed report · revision {report.confirmed_revision}</Badge>
           <h1 className="mt-3 text-2xl font-semibold">Care update for {report.patient_name}</h1>
@@ -256,7 +253,7 @@ export function ReportDetailScreen({ reportId, onBack }: { reportId: string; onB
 
         <section>
           <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Observations</h2>
-          {report.observations.length ? <div className="mt-3 space-y-2">{report.observations.map((observation, index) => <Card key={`${observation.type}-${index}`}><CardContent className="py-4"><p className="text-sm">{observation.description}</p><p className="mt-1 text-xs text-muted-foreground">{observation.type}</p></CardContent></Card>)}</div> : <Card className="mt-3"><CardContent className="py-4 text-sm text-muted-foreground">No observations recorded.</CardContent></Card>}
+          {report.observations.length ? <div className="mt-3 flex flex-col gap-2">{report.observations.map((observation, index) => <Card key={`${observation.type}-${index}`}><CardContent className="py-4"><p className="text-sm">{observation.description}</p><p className="mt-1 text-xs text-muted-foreground">{observation.type}</p></CardContent></Card>)}</div> : <Card className="mt-3"><CardContent className="py-4 text-sm text-muted-foreground">No observations recorded.</CardContent></Card>}
         </section>
 
         <details className="print:hidden"><summary className="cursor-pointer text-sm font-medium">Original transcript</summary><p className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">{report.original_transcript}</p></details>
