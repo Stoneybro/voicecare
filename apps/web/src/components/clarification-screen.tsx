@@ -196,9 +196,19 @@ export function VoiceAssistantPanel({ draftId, mode = "clarification", candidate
               if (mode === "expression" && result?.expression_suggestion) setSuggestion(result.expression_suggestion as Suggestion);
               if (mode === "clarification" && result?.expression_suggestion) setSuggestion(result.expression_suggestion as Suggestion);
               const nextIssueId = mode === "clarification" && typeof result.next_issue_id === "string" ? result.next_issue_id : null;
+              const nextTip = mode === "clarification" && typeof result.next_tip === "string" ? result.next_tip : null;
               const allBlockingDetailsClear = mode === "clarification" && result.issue_resolved === true && !nextIssueId;
               if (nextIssueId) issueIdRef.current = nextIssueId;
               if (allBlockingDetailsClear) clarificationCompleteReplyRef.current = true;
+              const clarificationInstruction = result.issue_resolved === true
+                ? nextIssueId
+                  ? nextTip
+                    ? `Ask the next question exactly as provided. That question's tip is: ${nextTip} Offer it only if the caregiver is unsure. Do not repeat the previous issue's tip or mention its measurement.`
+                    : "Ask the next question exactly as provided. Do not reuse the previous issue's tip or mention its measurement."
+                  : "All blocking details are resolved. Tell the caregiver they can review the update now, then do not ask anything else."
+                : nextTip
+                  ? `The detail is still unresolved. Ask the same question again more simply. If helpful, offer only this issue's tip: ${nextTip} Do not mention guidance for any other measurement.`
+                  : "The detail is still unresolved. Ask the same question again more simply. Do not introduce tips or details about another measurement.";
               socket.send(JSON.stringify({
                 type: "tool.result",
                 call_id: tool.call_id,
@@ -206,17 +216,14 @@ export function VoiceAssistantPanel({ draftId, mode = "clarification", candidate
                   saved: true,
                   resolved: mode === "expression" ? result.resolved : result.issue_resolved,
                   next_question: result.next_question,
+                  next_tip: nextTip,
                   instruction: mode === "confirmation"
                     ? "The draft is confirmed. Thank the caregiver briefly, then finish the conversation."
                     : mode === "expression"
                       ? result.resolved
                         ? "Thank the caregiver for explaining the phrase. Tell them to review the suggested mapping before saving it. Do not say it has been remembered."
                         : "Thank the caregiver. Tell them they can choose the meaning from the list on the review screen. Do not suggest a meaning."
-                    : nextIssueId
-                      ? "If the current detail is resolved, ask the next question exactly as provided. If it remains unresolved, ask the same question again more simply."
-                      : result.issue_resolved === true
-                        ? "All blocking details are resolved. Tell the caregiver they can review the update now, then do not ask anything else."
-                        : "That answer did not resolve the detail. Ask the same question again more simply. Do not say the update is ready to review.",
+                    : clarificationInstruction,
                 }),
                 is_error: false,
               }));

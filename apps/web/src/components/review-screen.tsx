@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { VoiceAssistantPanel } from "@/components/clarification-screen";
 import { Input } from "@/components/ui/input";
+import { clarificationTip } from "@/lib/clarification";
 
 type Measurement = {
   type: string;
@@ -27,6 +28,7 @@ type Observation = {
 type Issue = {
   id: string;
   type: string;
+  measurement_type?: string;
   message: string;
   question: string;
   source_text: string;
@@ -389,13 +391,17 @@ export function NoteReview({ draftId, onSaved, onBusyChange }: NoteReviewProps) 
               Details to clarify
             </h2>
             <ul className="mt-3 flex flex-col gap-3">
-              {draft.unresolved_issues.map((issue) => (
-                <li key={issue.id} className="rounded-lg bg-background/80 p-3">
-                  <p className="text-sm">{issue.message}</p>
-                  <p className="mt-1 text-sm font-medium">{issue.question}</p>
-                  {issue.source_text && <p className="mt-1 text-xs text-muted-foreground">From: “{issue.source_text}”</p>}
-                </li>
-              ))}
+              {draft.unresolved_issues.map((issue) => {
+                const tip = clarificationTip(issue);
+                return (
+                  <li key={issue.id} className="rounded-lg bg-background/80 p-3">
+                    <p className="text-sm">{issue.message}</p>
+                    <p className="mt-1 text-sm font-medium">{issue.question}</p>
+                    {tip && <p className="mt-1 text-xs text-muted-foreground"><span className="font-medium text-foreground">Tip:</span> {tip}</p>}
+                    {issue.source_text && <p className="mt-1 text-xs text-muted-foreground">From: “{issue.source_text}”</p>}
+                  </li>
+                );
+              })}
             </ul>
           </div>
           <div className="mt-3 flex flex-col gap-2 sm:flex-row">

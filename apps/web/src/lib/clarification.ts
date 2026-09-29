@@ -2,13 +2,35 @@ import type { UnresolvedIssue } from "@/lib/extraction";
 
 export type ClarificationIssue = UnresolvedIssue;
 
+export function clarificationTip(issue: { type: string; measurement_type?: string } | null | undefined): string | null {
+  if (!issue?.measurement_type) return null;
+
+  if (issue.type === "missing_unit") {
+    if (issue.measurement_type === "blood_glucose") return "Check the unit on the glucose meter display; it should show mg/dL or mmol/L.";
+    if (issue.measurement_type === "temperature") return "Check the thermometer display; it should show °C or °F.";
+  }
+
+  if (issue.type === "ambiguous_value") {
+    if (issue.measurement_type === "blood_pressure") return "If you have the monitor nearby, read both numbers as they appear on its display.";
+    if (issue.measurement_type === "blood_glucose") return "If you have the meter nearby, check the displayed reading and its unit.";
+    if (issue.measurement_type === "temperature") return "If you have the thermometer nearby, check its displayed reading and unit.";
+    if (issue.measurement_type === "heart_rate") return "If available, check the pulse or heart-rate reading on the device.";
+    if (issue.measurement_type === "spo2") return "If available, check the oxygen reading on the monitor.";
+  }
+
+  return null;
+}
+
 export function clarificationPrompt(issues: ClarificationIssue[]): string {
   const openIssue = issues[0];
+  const tip = clarificationTip(openIssue);
   return [
     "You are VoiceCare's brief clarification assistant for a caregiver recording a health update.",
     "Ask only the unresolved detail provided below, one question at a time. Do not diagnose, recommend treatment, or interpret whether a value is medically safe.",
     "Listen to the caregiver's answer, then call the submit_clarification_answer tool with their answer verbatim. Do not claim an answer was saved until the tool confirms it.",
     "If the answer does not resolve the question, politely ask the same question again in simpler words. Keep replies short and warm.",
+    "Any tip is specific to the exact unresolved detail it accompanies. Never carry a tip or measurement-specific guidance to another question. When a tool result provides the next question, follow only the tip supplied for that next question.",
+    ...(tip ? [`If the caregiver is unsure, offer this tip: ${tip} Do not guess or convert the unit.`] : []),
     `Current unresolved detail: ${openIssue ? `${openIssue.message} Ask: ${openIssue.question}` : "There are no unresolved details."}`,
   ].join("\n");
 }

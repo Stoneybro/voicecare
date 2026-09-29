@@ -1,5 +1,5 @@
 import { getSql } from "@/lib/db";
-import { clarificationPrompt, clarificationQuestion, type ClarificationIssue } from "@/lib/clarification";
+import { clarificationPrompt, clarificationQuestion, clarificationTip, type ClarificationIssue } from "@/lib/clarification";
 import type { ExpressionCandidate } from "@/lib/expressions";
 import { ApiError, handle, jsonOk } from "@/lib/http";
 import { requireSession } from "@/lib/session";
@@ -41,8 +41,9 @@ export async function GET(request: Request): Promise<Response> {
       }
       if (!issues.length) throw new ApiError(409, "no_open_issues", "This draft has no unresolved details.");
       question = clarificationQuestion(issues);
+      const tip = clarificationTip(issues[0]);
       systemPrompt = clarificationPrompt(issues);
-      greeting = `I have one detail to clarify. ${question}`;
+      greeting = `I have one detail to clarify. ${question}${tip ? ` If you're not sure, ${tip[0].toLowerCase()}${tip.slice(1)}` : ""}`;
       tool = {
         type: "function",
         name: "submit_clarification_answer",

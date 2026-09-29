@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { amendTranscriptForClarification, type ClarificationIssue } from "@/lib/clarification";
+import { amendTranscriptForClarification, clarificationTip, type ClarificationIssue } from "@/lib/clarification";
 import { getSql } from "@/lib/db";
 import { detectExpressionSuggestion, loadPersonalExpressions } from "@/lib/expressions";
 import { extractTranscriptWithModel } from "@/lib/llm-extraction";
@@ -63,6 +63,9 @@ export async function POST(
       recorded_at: new Date().toISOString(),
       resolved: !nextIssues.some((entry) => entry.id === issue.id),
     };
+    const nextIssue = clarificationEntry.resolved
+      ? nextIssues[0]
+      : nextIssues.find((entry) => entry.id === issue.id) ?? nextIssues[0];
     const memorySuggestion = detectExpressionSuggestion(`${draft.original_transcript}\n${answer}`);
     if (memorySuggestion && clarificationEntry.resolved) clarificationEntry["memory_suggestion"] = memorySuggestion;
     const patient = session.patients.find((entry) => entry.id === draft.patient_id);
@@ -118,8 +121,9 @@ export async function POST(
       revision: updated[0].revision,
       status: updated[0].status,
       issue_resolved: clarificationEntry.resolved,
-      next_issue_id: nextIssues[0]?.id ?? null,
-      next_question: nextIssues[0]?.question ?? null,
+      next_issue_id: nextIssue?.id ?? null,
+      next_question: nextIssue?.question ?? null,
+      next_tip: clarificationTip(nextIssue),
       unresolved_issues: nextIssues,
       measurements: updated[0].measurements,
       observations: updated[0].observations,
